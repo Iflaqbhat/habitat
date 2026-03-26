@@ -1,0 +1,68 @@
+Found 2 __HABITAT tests:
+  - test/integration/targets/callback_results/test_connection_propagation__HABITAT.py
+  - test/integration/targets/callback_results/callback_plugins/track_connections__HABITAT.py
+
+============================================================
+Running Ansible unit tests
+============================================================
+Running: /workdir/repo/.venv/bin/python -m pytest -v --junit-xml=/workdir/artifacts/logs/pytest-units.xml --timeout=300 --tb=short -n auto --forked --ignore=test/units/_internal/_errors/test_alarm_timeout.py --ignore=test/units/config/manager/test_find_ini_config_file.py --deselect=test/units/module_utils/common/arg_spec/test_module_validate.py::test_module_alias_deprecations_warnings --deselect=test/units/galaxy/test_collection_install.py::test_install_installed_collection --deselect=test/units/cli/galaxy/test_execute_list_collection.py::test_execute_list_collection_one_invalid_path --deselect=test/units/module_utils/basic/test_argument_spec.py::TestComplexArgSpecs::test_complex_duplicate_warning --deselect=test/units/module_utils/basic/test_argument_spec.py::TestComplexArgSpecs::test_deprecated_alias --deselect=test/units/module_utils/basic/test_argument_spec.py::test_no_log_none --deselect=test/units/cli/test_galaxy.py::test_collection_install_with_names --deselect=test/units/cli/test_galaxy.py::test_collection_install_with_requirements_file --deselect=test/units/cli/test_galaxy.py::test_collection_install_in_collection_dir --deselect=test/units/cli/test_galaxy.py::test_collection_install_path_with_ansible_collections test/units/ -k __HABITAT or not __HABITAT
+Working directory: /workdir/repo
+Session timeout: 5400s
+------------------------------------------------------------
+============================= test session starts ==============================
+platform linux -- Python 3.12.12, pytest-9.0.2, pluggy-1.6.0 -- /workdir/repo/.venv/bin/python
+cachedir: .pytest_cache
+rootdir: /workdir/repo
+configfile: pyproject.toml
+plugins: cov-7.0.0, forked-1.6.0, mock-3.15.1, timeout-2.4.0, xdist-3.8.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+created: 6/6 workers
+6 workers [0 items]
+
+scheduling tests via LoadScheduling
+
+--------- generated xml file: /workdir/artifacts/logs/pytest-units.xml ---------
+============================ no tests ran in 2.63s =============================
+
+Unit tests failed with code 5
+
+============================================================
+Running __HABITAT injected tests
+============================================================
+Running: /workdir/repo/.venv/bin/python -m pytest -v --junit-xml=/workdir/artifacts/logs/pytest-habitat.xml --timeout=300 --tb=short -n auto --forked --ignore=test/units/_internal/_errors/test_alarm_timeout.py --ignore=test/units/config/manager/test_find_ini_config_file.py --deselect=test/units/module_utils/common/arg_spec/test_module_validate.py::test_module_alias_deprecations_warnings --deselect=test/units/galaxy/test_collection_install.py::test_install_installed_collection --deselect=test/units/cli/galaxy/test_execute_list_collection.py::test_execute_list_collection_one_invalid_path --deselect=test/units/module_utils/basic/test_argument_spec.py::TestComplexArgSpecs::test_complex_duplicate_warning --deselect=test/units/module_utils/basic/test_argument_spec.py::TestComplexArgSpecs::test_deprecated_alias --deselect=test/units/module_utils/basic/test_argument_spec.py::test_no_log_none --deselect=test/units/cli/test_galaxy.py::test_collection_install_with_names --deselect=test/units/cli/test_galaxy.py::test_collection_install_with_requirements_file --deselect=test/units/cli/test_galaxy.py::test_collection_install_in_collection_dir --deselect=test/units/cli/test_galaxy.py::test_collection_install_path_with_ansible_collections test/integration/targets/callback_results/test_connection_propagation__HABITAT.py test/integration/targets/callback_results/callback_plugins/track_connections__HABITAT.py
+Working directory: /workdir/repo
+Session timeout: 1350s
+------------------------------------------------------------
+============================= test session starts ==============================
+platform linux -- Python 3.12.12, pytest-9.0.2, pluggy-1.6.0 -- /workdir/repo/.venv/bin/python
+cachedir: .pytest_cache
+rootdir: /workdir/repo
+configfile: pyproject.toml
+plugins: cov-7.0.0, forked-1.6.0, mock-3.15.1, timeout-2.4.0, xdist-3.8.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+created: 6/6 workers
+6 workers [1 item]
+
+scheduling tests via LoadScheduling
+
+test/integration/targets/callback_results/test_connection_propagation__HABITAT.py::test_connection_propagation__HABITAT 
+[gw0] [100%] PASSED test/integration/targets/callback_results/test_connection_propagation__HABITAT.py::test_connection_propagation__HABITAT 
+
+=============================== warnings summary ===============================
+test/integration/targets/callback_results/test_connection_propagation__HABITAT.py::test_connection_propagation__HABITAT
+  /workdir/repo/.venv/lib/python3.12/site-packages/py/_process/forkedfunc.py:45: DeprecationWarning: This process (pid=1316) is multi-threaded, use of fork() may lead to deadlocks in the child.
+    pid = os.fork()
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+-------- generated xml file: /workdir/artifacts/logs/pytest-habitat.xml --------
+======================== 1 passed, 1 warning in 15.21s =========================
+
+Applying 19 ignore patterns...
+
+------------------------------------------------------------
+Test run completed with exit code: 1
+JUnit XML output: /tmp/test_output_junit.xml

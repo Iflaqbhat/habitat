@@ -1,0 +1,209 @@
+diff --git a/test/integration/targets/callback_results/callback_plugins/track_connections__HABITAT.py b/test/integration/targets/callback_results/callback_plugins/track_connections__HABITAT.py
+new file mode 100644
+index 0000000000..15075bfe87
+--- /dev/null
++++ b/test/integration/targets/callback_results/callback_plugins/track_connections__HABITAT.py
+@@ -0,0 +1,73 @@
++# Copyright: Contributors to the Ansible project
++# GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
++
++from __future__ import annotations
++
++DOCUMENTATION = """
++    name: track_connections__HABITAT
++    short_description: Track connection plugins used for hosts
++    description:
++        - Track connection plugins used for hosts
++    type: aggregate
++"""
++
++import functools
++import inspect
++import json
++
++from collections import defaultdict
++
++from ansible.plugins.callback import CallbackBase
++from ansible.executor.task_result import CallbackTaskResult
++
++
++class CallbackModule(CallbackBase):
++    CALLBACK_VERSION = 2.0
++    CALLBACK_TYPE = 'aggregate'
++    CALLBACK_NAME = 'track_connections__HABITAT'
++    CALLBACK_NEEDS_ENABLED = True
++
++    def __init__(self, *args, **kwargs):
++        super().__init__(*args, **kwargs)
++
++        self._conntrack = defaultdict(lambda : defaultdict(list))
++
++        # dynamically implement all v2 callback methods that accept `result`
++        for name, sig in ((cb, inspect.signature(getattr(self, cb))) for cb in dir(self) if cb.startswith('v2_')):
++            if 'result' in sig.parameters:
++                setattr(self, name, functools.partial(self._track, event_name=name))
++
++    def _track(self, result: CallbackTaskResult, *_args, event_name: str, **_kwargs):
++        host = result.host.get_name()
++        task = result.task
++
++        self._conntrack[host][task.connection].append(f'{event_name}: {task.name}')
++
++    def v2_playbook_on_stats(self, stats):
++        expected = {
++            "localhost": {
++                "ansible.builtin.local": [
++                    "v2_runner_on_ok: execute a successful non-loop task with the local connection",
++                    "v2_runner_on_failed: execute a failing non-loop task with the local connection",
++                    "v2_runner_item_on_ok: execute a successful looped task with the local connection",
++                    "v2_runner_on_ok: execute a successful looped task with the local connection",
++                    "v2_runner_item_on_failed: execute a failing looped task with the local connection",
++                    "v2_runner_on_failed: execute a failing looped task with the local connection",
++                    "v2_runner_on_async_ok: execute a successful async task with the local connection",
++                    "v2_runner_on_ok: execute a successful async task with the local connection",
++                    "v2_runner_on_async_failed: execute a failing async task with the local connection",
++                    "v2_runner_on_failed: execute a failing async task with the local connection",
++                    "v2_runner_on_async_ok: execute a looped async task with the local connection",
++                    "v2_runner_item_on_ok: execute a looped async task with the local connection",
++                    "v2_runner_on_ok: execute a looped async task with the local connection"
++                ],
++            }
++        }
++
++        if self._conntrack == expected:
++            self._display.display('FOUND EXPECTED EVENTS')
++            return
++
++        # pragma: nocover
++        self._display.display(f'ACTUAL\n{json.dumps(self._conntrack, indent=4)}')
++        self._display.display(f'EXPECTED\n{json.dumps(expected, indent=4)}')
+diff --git a/test/integration/targets/callback_results/connection_name__HABITAT.yml b/test/integration/targets/callback_results/connection_name__HABITAT.yml
+new file mode 100644
+index 0000000000..439e3cab0a
+--- /dev/null
++++ b/test/integration/targets/callback_results/connection_name__HABITAT.yml
+@@ -0,0 +1,38 @@
++- hosts: localhost
++  gather_facts: no
++  vars:
++    ansible_connection: '{{ "ansible.legacy.local" }}'  # use a templated value with the non-canonical name of the connection; this should resolve to `ansible.builtin.local`
++  name: validate that task.connection is always overwritten with the templated and resolved name of the connection
++  tasks:
++    - name: execute a successful non-loop task with the local connection
++      raw: echo hi
++
++    - name: execute a failing non-loop task with the local connection
++      raw: exit 1
++      ignore_errors: true
++
++    - name: execute a successful looped task with the local connection
++      raw: echo hi {{ item }}
++      loop: [1]
++
++    - name: execute a failing looped task with the local connection
++      raw: echo hi {{ item }}; exit 1
++      ignore_errors: true
++      loop: [1]
++
++    - name: execute a successful async task with the local connection
++      command: echo hi
++      async: 5
++      poll: 1
++
++    - name: execute a failing async task with the local connection
++      command: /bin/false
++      async: 5
++      poll: 1
++      ignore_errors: true
++
++    - name: execute a looped async task with the local connection
++      command: echo hi {{ item }}
++      async: 5
++      poll: 1
++      loop: [1]
+diff --git a/test/integration/targets/callback_results/test_connection_propagation__HABITAT.py b/test/integration/targets/callback_results/test_connection_propagation__HABITAT.py
+new file mode 100644
+index 0000000000..5b768b6ce1
+--- /dev/null
++++ b/test/integration/targets/callback_results/test_connection_propagation__HABITAT.py
+@@ -0,0 +1,80 @@
++# Copyright: Contributors to the Ansible project
++# GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
++
++from __future__ import annotations
++
++import os
++import shutil
++import subprocess
++import sys
++import tempfile
++
++
++def test_connection_propagation__HABITAT():
++    """Test that task.connection is properly propagated with resolved connection name."""
++    # Get the directory where this test file is located
++    test_dir = os.path.dirname(os.path.abspath(__file__))
++    playbook_path = os.path.join(test_dir, 'connection_name__HABITAT.yml')
++
++    # Find ansible-playbook - try multiple methods
++    ansible_playbook_cmd = None
++
++    # Method 1: Try to find in PATH
++    ansible_playbook = shutil.which('ansible-playbook')
++
++    # Method 2: Try to find in repo's bin directory
++    if not ansible_playbook:
++        repo_root = os.path.abspath(os.path.join(test_dir, '../../../../..'))
++        bin_path = os.path.join(repo_root, 'bin', 'ansible-playbook')
++        if os.path.exists(bin_path) and os.access(bin_path, os.X_OK):
++            ansible_playbook = bin_path
++
++    # Method 3: Use Python module (most reliable)
++    if ansible_playbook:
++        ansible_playbook_cmd = [ansible_playbook]
++    else:
++        # Use Python to run ansible-playbook as a module
++        ansible_playbook_cmd = [sys.executable, '-m', 'ansible.cli.playbook']
++
++    # Create a temporary file for output
++    with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.out') as outfile:
++        outfile_path = outfile.name
++
++    try:
++        # Run ansible-playbook with the callback enabled
++        env = os.environ.copy()
++        env['ANSIBLE_CALLBACKS_ENABLED'] = 'track_connections__HABITAT'
++
++        cmd = ansible_playbook_cmd + [
++            playbook_path,
++            '-i', 'localhost,'
++        ]
++
++        # Run the playbook and capture output
++        result = subprocess.run(
++            cmd,
++            cwd=test_dir,
++            env=env,
++            capture_output=True,
++            text=True,
++            check=False
++        )
++
++        # Write output to file for grep
++        with open(outfile_path, 'w') as f:
++            f.write(result.stdout)
++            f.write(result.stderr)
++
++        # Check that the expected message is in the output
++        output = result.stdout + result.stderr
++        assert 'FOUND EXPECTED EVENTS' in output, (
++            f"Expected 'FOUND EXPECTED EVENTS' not found in output.\n"
++            f"Return code: {result.returncode}\n"
++            f"Stdout: {result.stdout}\n"
++            f"Stderr: {result.stderr}"
++        )
++
++    finally:
++        # Clean up temp file
++        if os.path.exists(outfile_path):
++            os.unlink(outfile_path)

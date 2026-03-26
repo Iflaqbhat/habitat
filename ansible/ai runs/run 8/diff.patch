@@ -1,0 +1,125 @@
+diff --git a/lib/ansible/executor/task_executor.py b/lib/ansible/executor/task_executor.py
+index ecf76a5..1b84ad4 100644
+--- a/lib/ansible/executor/task_executor.py
++++ b/lib/ansible/executor/task_executor.py
+@@ -400,6 +400,9 @@ class TaskExecutor:
+         # This is saving the post-validated field from the last loop so the strategy can use the templated value post task execution
+         self._task.run_once = task_fields.get('run_once')
+         self._task.action = task_fields.get('action')
++        # Update connection to reflect the resolved connection plugin name for the aggregated result
++        if task_fields.get('connection') is not None:
++            self._task.connection = task_fields.get('connection')
+ 
+         return results
+ 
+@@ -581,6 +584,9 @@ class TaskExecutor:
+             self._connection._play_context = self._play_context
+             self._set_become_plugin(cvars, templar, self._connection)
+ 
++        # Update task.connection to reflect the resolved connection plugin name
++        self._task.connection = self._connection.ansible_name
++
+         plugin_vars = self._set_connection_options(cvars, templar)
+ 
+         # make a copy of the job vars here, as we update them here and later,
+@@ -866,6 +872,10 @@ class TaskExecutor:
+             environment=self._task.environment,
+         ))
+ 
++        # Set the resolved connection name on the async task
++        if self._connection:
++            async_task.connection = self._connection.ansible_name
++
+         # FIXME: this is no longer the case, normal takes care of all, see if this can just be generalized
+         # Because this is an async task, the action handler is async. However,
+         # we need the 'normal' action handler for the status check, so get it
+diff --git a/test/integration/targets/ansible-test-debugging-env/aliases b/test/integration/targets/ansible-test-debugging-env/aliases
+new file mode 100644
+index 0000000..bf60838
+--- /dev/null
++++ b/test/integration/targets/ansible-test-debugging-env/aliases
+@@ -0,0 +1,2 @@
++shippable/generic/group1  # runs in the default test container
++context/controller
+diff --git a/test/integration/targets/ansible-test-debugging-env/runme.sh b/test/integration/targets/ansible-test-debugging-env/runme.sh
+new file mode 100755
+index 0000000..1ec9edd
+--- /dev/null
++++ b/test/integration/targets/ansible-test-debugging-env/runme.sh
+@@ -0,0 +1,4 @@
++#!/usr/bin/env bash
++# Used to support the ansible-test-debugging integration test.
++
++env
+diff --git a/test/integration/targets/lookup_env/aliases b/test/integration/targets/lookup_env/aliases
+new file mode 100644
+index 0000000..b598321
+--- /dev/null
++++ b/test/integration/targets/lookup_env/aliases
+@@ -0,0 +1 @@
++shippable/posix/group3
+diff --git a/test/integration/targets/lookup_env/runme.sh b/test/integration/targets/lookup_env/runme.sh
+new file mode 100755
+index 0000000..85fb000
+--- /dev/null
++++ b/test/integration/targets/lookup_env/runme.sh
+@@ -0,0 +1,9 @@
++#!/bin/sh
++
++set -eux
++
++unset USR
++
++ENVVAR1='var1value' USR='' ansible-playbook vars_set.yml -i ../../inventory "${@}"
++
++ansible-playbook vars_not_set.yml -i ../../inventory "${@}"
+diff --git a/test/integration/targets/lookup_env/vars_not_set.yml b/test/integration/targets/lookup_env/vars_not_set.yml
+new file mode 100644
+index 0000000..44f5b71
+--- /dev/null
++++ b/test/integration/targets/lookup_env/vars_not_set.yml
+@@ -0,0 +1,23 @@
++- hosts: testhost
++  gather_facts: no
++  tasks:
++    - name: look up an environment variable which is not set with various default behaviors
++      ansible._protomatter.debug:
++        expression:
++          - lookup('env', 'USR') == ''  # expect '' (the default fallback value)
++          - lookup('env', 'USR', default='nobody') == 'nobody'  # expect 'nobody'
++          - lookup('env', 'USR', default=undef())  # expect a hint-ed undefined from the env lookup
++          - lookup('env', 'USR', default=undef('custom'))  #  expect an undefined whose hint is 'custom'
++          - lookup('env', 'USR', default=bogus_var)  #  expect an undefined hinting at bogus_var
++      register: result
++
++    - name: verify the lookups returned the expected results
++      assert:
++        that:
++          - result.expression_result[0:2] == [true, true]
++          - result.expression_result[2] is search("environment variable 'USR' is not set")
++          - result.expression_result[3] is search("custom")
++          - result.expression_result[4] is search("'bogus_var' is undefined")
++          - result.warnings | select("search", "'USR' is not set") | length == 1
++          - result.warnings | select("search", "custom") | length == 1
++          - result.warnings | select("search", "'bogus_var' is undefined") | length == 1
+diff --git a/test/integration/targets/lookup_env/vars_set.yml b/test/integration/targets/lookup_env/vars_set.yml
+new file mode 100644
+index 0000000..c96a24f
+--- /dev/null
++++ b/test/integration/targets/lookup_env/vars_set.yml
+@@ -0,0 +1,15 @@
++- hosts: testhost
++  gather_facts: no
++  tasks:
++    - name: look up an environment variable which is set with various default behaviors
++      assert:
++        that:
++          - lookup('env', 'USR') == ''
++          - lookup('env', 'USR', default='nobody') == ''
++          - lookup('env', 'USR', default=undef()) == ''
++          - lookup('env', 'USR', default=undef('custom')) == ''
++          - lookup('env', 'ENVVAR1') == 'var1value'
++    - name: verify origin is reported
++      assert:
++        that:
++          - lookup('env', 'ENVVAR1') | ansible._protomatter.origin == "<environment variable 'ENVVAR1'>"
