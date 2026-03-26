@@ -1,0 +1,711 @@
+diff --git a/agent/proxycfg/api_gateway.go b/agent/proxycfg/api_gateway.go
+index 4379823..90d750c 100644
+--- a/agent/proxycfg/api_gateway.go
++++ b/agent/proxycfg/api_gateway.go
+@@ -64,6 +64,7 @@ func (h *handlerAPIGateway) initialize(ctx context.Context) (ConfigSnapshot, err
+ 	snap.APIGateway.HTTPRoutes = watch.NewMap[structs.ResourceReference, *structs.HTTPRouteConfigEntry]()
+ 	snap.APIGateway.TCPRoutes = watch.NewMap[structs.ResourceReference, *structs.TCPRouteConfigEntry]()
+ 	snap.APIGateway.Certificates = watch.NewMap[structs.ResourceReference, *structs.InlineCertificateConfigEntry]()
++	snap.APIGateway.FileSystemCertificates = watch.NewMap[structs.ResourceReference, *structs.FileSystemCertificateConfigEntry]()
+ 
+ 	snap.APIGateway.Upstreams = make(listenerRouteUpstreams)
+ 	snap.APIGateway.UpstreamsSet = make(routeUpstreamSet)
+@@ -118,6 +119,11 @@ func (h *handlerAPIGateway) handleUpdate(ctx context.Context, u UpdateEvent, sna
+ 		if err := h.handleInlineCertConfigUpdate(ctx, u, snap); err != nil {
+ 			return err
+ 		}
++	case fileSystemCertificateConfigWatchID:
++		// Handle change in an attached file-system-certificate config entry
++		if err := h.handleFileSystemCertConfigUpdate(ctx, u, snap); err != nil {
++			return err
++		}
+ 	case routeConfigWatchID:
+ 		// Handle change in an attached http-route or tcp-route config entry
+ 		if err := h.handleRouteConfigUpdate(ctx, u, snap); err != nil {
+@@ -201,16 +207,27 @@ func (h *handlerAPIGateway) handleGatewayConfigUpdate(ctx context.Context, u Upd
+ 				}
+ 			}
+ 
+-			// Subscribe to changes in each attached inline-certificate config entry
++			// Subscribe to changes in each attached certificate config entry
+ 			for _, ref := range listener.Certificates {
+ 				ctx, cancel := context.WithCancel(ctx)
+ 				seenRefs[ref] = struct{}{}
+-				snap.APIGateway.Certificates.InitWatch(ref, cancel)
+ 
+-				err := h.subscribeToConfigEntry(ctx, ref.Kind, ref.Name, ref.EnterpriseMeta, inlineCertificateConfigWatchID)
+-				if err != nil {
+-					// TODO May want to continue
+-					return err
++				switch ref.Kind {
++				case structs.InlineCertificate:
++					snap.APIGateway.Certificates.InitWatch(ref, cancel)
++					err := h.subscribeToConfigEntry(ctx, ref.Kind, ref.Name, ref.EnterpriseMeta, inlineCertificateConfigWatchID)
++					if err != nil {
++						return err
++					}
++				case structs.FileSystemCertificate:
++					snap.APIGateway.FileSystemCertificates.InitWatch(ref, cancel)
++					err := h.subscribeToConfigEntry(ctx, ref.Kind, ref.Name, ref.EnterpriseMeta, fileSystemCertificateConfigWatchID)
++					if err != nil {
++						return err
++					}
++				default:
++					cancel()
++					return fmt.Errorf("unexpected certificate kind on gateway: %s", ref.Kind)
+ 				}
+ 			}
+ 		}
+@@ -241,6 +258,13 @@ func (h *handlerAPIGateway) handleGatewayConfigUpdate(ctx context.Context, u Upd
+ 			return true
+ 		})
+ 
++		snap.APIGateway.FileSystemCertificates.ForEachKey(func(ref structs.ResourceReference) bool {
++			if _, ok := seenRefs[ref]; !ok {
++				snap.APIGateway.FileSystemCertificates.CancelWatch(ref)
++			}
++			return true
++		})
++
+ 		snap.APIGateway.BoundGatewayConfigLoaded = true
+ 		break
+ 	case *structs.APIGatewayConfigEntry:
+@@ -290,6 +314,31 @@ func (h *handlerAPIGateway) handleInlineCertConfigUpdate(_ context.Context, u Up
+ 	return nil
+ }
+ 
++// handleFileSystemCertConfigUpdate stores the file system certificate for the gateway
++func (h *handlerAPIGateway) handleFileSystemCertConfigUpdate(_ context.Context, u UpdateEvent, snap *ConfigSnapshot) error {
++	resp, ok := u.Result.(*structs.ConfigEntryResponse)
++	if !ok {
++		return fmt.Errorf("invalid type for response: %T", u.Result)
++	} else if resp.Entry == nil {
++		return nil
++	}
++
++	cfg, ok := resp.Entry.(*structs.FileSystemCertificateConfigEntry)
++	if !ok {
++		return fmt.Errorf("invalid type for config entry: %T", resp.Entry)
++	}
++
++	ref := structs.ResourceReference{
++		Kind:           cfg.GetKind(),
++		Name:           cfg.GetName(),
++		EnterpriseMeta: *cfg.GetEnterpriseMeta(),
++	}
++
++	snap.APIGateway.FileSystemCertificates.Set(ref, cfg)
++
++	return nil
++}
++
+ // handleRouteConfigUpdate builds the list of upstreams for services on
+ // the route and watches the related discovery chains.
+ func (h *handlerAPIGateway) handleRouteConfigUpdate(ctx context.Context, u UpdateEvent, snap *ConfigSnapshot) error {
+diff --git a/agent/proxycfg/snapshot.go b/agent/proxycfg/snapshot.go
+index 8f407c1..4f2ea69 100644
+--- a/agent/proxycfg/snapshot.go
++++ b/agent/proxycfg/snapshot.go
+@@ -735,9 +735,10 @@ type configSnapshotAPIGateway struct {
+ 	// UpstreamsSet is the unique set of UpstreamID the gateway routes to.
+ 	UpstreamsSet routeUpstreamSet
+ 
+-	HTTPRoutes   watch.Map[structs.ResourceReference, *structs.HTTPRouteConfigEntry]
+-	TCPRoutes    watch.Map[structs.ResourceReference, *structs.TCPRouteConfigEntry]
+-	Certificates watch.Map[structs.ResourceReference, *structs.InlineCertificateConfigEntry]
++	HTTPRoutes             watch.Map[structs.ResourceReference, *structs.HTTPRouteConfigEntry]
++	TCPRoutes              watch.Map[structs.ResourceReference, *structs.TCPRouteConfigEntry]
++	Certificates           watch.Map[structs.ResourceReference, *structs.InlineCertificateConfigEntry]
++	FileSystemCertificates watch.Map[structs.ResourceReference, *structs.FileSystemCertificateConfigEntry]
+ 
+ 	// LeafCertWatchCancel is a CancelFunc to use when refreshing this gateway's
+ 	// leaf cert watch with different parameters.
+diff --git a/agent/proxycfg/state.go b/agent/proxycfg/state.go
+index a113903..e36ae8d 100644
+--- a/agent/proxycfg/state.go
++++ b/agent/proxycfg/state.go
+@@ -39,6 +39,7 @@ const (
+ 	apiGatewayConfigWatchID            = "api-gateway-config"
+ 	boundGatewayConfigWatchID          = "bound-gateway-config"
+ 	inlineCertificateConfigWatchID     = "inline-certificate-config"
++	fileSystemCertificateConfigWatchID = "file-system-certificate-config"
+ 	routeConfigWatchID                 = "route-config"
+ 	externalServiceIDPrefix            = "external-service:"
+ 	serviceLeafIDPrefix                = "service-leaf:"
+diff --git a/agent/structs/config_entry.go b/agent/structs/config_entry.go
+index 04393b2..4972175 100644
+--- a/agent/structs/config_entry.go
++++ b/agent/structs/config_entry.go
+@@ -27,22 +27,23 @@ import (
+ )
+ 
+ const (
+-	ServiceDefaults    string = "service-defaults"
+-	ProxyDefaults      string = "proxy-defaults"
+-	ServiceRouter      string = "service-router"
+-	ServiceSplitter    string = "service-splitter"
+-	ServiceResolver    string = "service-resolver"
+-	IngressGateway     string = "ingress-gateway"
+-	TerminatingGateway string = "terminating-gateway"
+-	ServiceIntentions  string = "service-intentions"
+-	MeshConfig         string = "mesh"
+-	ExportedServices   string = "exported-services"
+-	SamenessGroup      string = "sameness-group"
+-	APIGateway         string = "api-gateway"
+-	BoundAPIGateway    string = "bound-api-gateway"
+-	InlineCertificate  string = "inline-certificate"
+-	HTTPRoute          string = "http-route"
+-	TCPRoute           string = "tcp-route"
++	ServiceDefaults       string = "service-defaults"
++	ProxyDefaults         string = "proxy-defaults"
++	ServiceRouter         string = "service-router"
++	ServiceSplitter       string = "service-splitter"
++	ServiceResolver       string = "service-resolver"
++	IngressGateway        string = "ingress-gateway"
++	TerminatingGateway    string = "terminating-gateway"
++	ServiceIntentions     string = "service-intentions"
++	MeshConfig            string = "mesh"
++	ExportedServices      string = "exported-services"
++	SamenessGroup         string = "sameness-group"
++	APIGateway            string = "api-gateway"
++	BoundAPIGateway       string = "bound-api-gateway"
++	InlineCertificate     string = "inline-certificate"
++	FileSystemCertificate string = "file-system-certificate"
++	HTTPRoute             string = "http-route"
++	TCPRoute              string = "tcp-route"
+ 	// TODO: decide if we want to highlight 'ip' keyword in the name of RateLimitIPConfig
+ 	RateLimitIPConfig string = "control-plane-request-limit"
+ 	JWTProvider       string = "jwt-provider"
+@@ -72,6 +73,7 @@ var AllConfigEntryKinds = []string{
+ 	HTTPRoute,
+ 	TCPRoute,
+ 	InlineCertificate,
++	FileSystemCertificate,
+ 	RateLimitIPConfig,
+ 	JWTProvider,
+ }
+@@ -834,6 +836,8 @@ func MakeConfigEntry(kind, name string) (ConfigEntry, error) {
+ 		return &BoundAPIGatewayConfigEntry{Name: name}, nil
+ 	case InlineCertificate:
+ 		return &InlineCertificateConfigEntry{Name: name}, nil
++	case FileSystemCertificate:
++		return &FileSystemCertificateConfigEntry{Name: name}, nil
+ 	case HTTPRoute:
+ 		return &HTTPRouteConfigEntry{Name: name}, nil
+ 	case TCPRoute:
+diff --git a/agent/structs/config_entry_file_system_certificate.go b/agent/structs/config_entry_file_system_certificate.go
+new file mode 100644
+index 0000000..822d698
+--- /dev/null
++++ b/agent/structs/config_entry_file_system_certificate.go
+@@ -0,0 +1,88 @@
++// Copyright (c) HashiCorp, Inc.
++// SPDX-License-Identifier: BUSL-1.1
++
++package structs
++
++import (
++	"github.com/hashicorp/consul/acl"
++)
++
++// FileSystemCertificateConfigEntry manages the configuration for a TLS certificate
++// and private key located on the local file system.
++type FileSystemCertificateConfigEntry struct {
++	// Kind of config entry. This will be set to structs.FileSystemCertificate.
++	Kind string
++
++	// Name is used to match the config entry with its associated file-system certificate.
++	Name string
++
++	// Certificate is the path to the public certificate file on the local filesystem.
++	Certificate string
++	// PrivateKey is the path to the private key file on the local filesystem.
++	PrivateKey string
++
++	Meta               map[string]string `json:",omitempty"`
++	Hash               uint64            `json:",omitempty" hash:"ignore"`
++	acl.EnterpriseMeta `hcl:",squash" mapstructure:",squash"`
++	RaftIndex          `hash:"ignore"`
++}
++
++func (e *FileSystemCertificateConfigEntry) SetHash(h uint64) {
++	e.Hash = h
++}
++
++func (e *FileSystemCertificateConfigEntry) GetHash() uint64 {
++	return e.Hash
++}
++
++func (e *FileSystemCertificateConfigEntry) GetKind() string { return FileSystemCertificate }
++func (e *FileSystemCertificateConfigEntry) GetName() string { return e.Name }
++func (e *FileSystemCertificateConfigEntry) Normalize() error {
++	h, err := HashConfigEntry(e)
++	if err != nil {
++		return err
++	}
++	e.Hash = h
++	return nil
++}
++func (e *FileSystemCertificateConfigEntry) GetMeta() map[string]string { return e.Meta }
++func (e *FileSystemCertificateConfigEntry) GetEnterpriseMeta() *acl.EnterpriseMeta {
++	return &e.EnterpriseMeta
++}
++func (e *FileSystemCertificateConfigEntry) GetRaftIndex() *RaftIndex { return &e.RaftIndex }
++
++func (e *FileSystemCertificateConfigEntry) Validate() error {
++	err := validateConfigEntryMeta(e.Meta)
++	if err != nil {
++		return err
++	}
++
++	// File paths are not validated for existence or accessibility.
++	// Empty paths are allowed per the spec.
++
++	return nil
++}
++
++func (e *FileSystemCertificateConfigEntry) CanRead(authz acl.Authorizer) error {
++	var authzContext acl.AuthorizerContext
++	e.FillAuthzContext(&authzContext)
++	return authz.ToAllowAuthorizer().MeshReadAllowed(&authzContext)
++}
++
++func (e *FileSystemCertificateConfigEntry) CanWrite(authz acl.Authorizer) error {
++	var authzContext acl.AuthorizerContext
++	e.FillAuthzContext(&authzContext)
++	return authz.ToAllowAuthorizer().MeshWriteAllowed(&authzContext)
++}
++
++// DeepCopy generates a deep copy of *FileSystemCertificateConfigEntry
++func (e *FileSystemCertificateConfigEntry) DeepCopy() *FileSystemCertificateConfigEntry {
++	var cp FileSystemCertificateConfigEntry = *e
++	if e.Meta != nil {
++		cp.Meta = make(map[string]string, len(e.Meta))
++		for k, v := range e.Meta {
++			cp.Meta[k] = v
++		}
++	}
++	return &cp
++}
+diff --git a/agent/xds/secrets.go b/agent/xds/secrets.go
+index 628cec7..c1791ca 100644
+--- a/agent/xds/secrets.go
++++ b/agent/xds/secrets.go
+@@ -7,6 +7,8 @@ import (
+ 	"errors"
+ 	"fmt"
+ 
++	envoy_core_v3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
++	envoy_tls_v3 "github.com/envoyproxy/go-control-plane/envoy/extensions/transport_sockets/tls/v3"
+ 	"google.golang.org/protobuf/proto"
+ 
+ 	"github.com/hashicorp/consul/agent/proxycfg"
+@@ -24,10 +26,48 @@ func (s *ResourceGenerator) secretsFromSnapshot(cfgSnap *proxycfg.ConfigSnapshot
+ 	case structs.ServiceKindConnectProxy,
+ 		structs.ServiceKindTerminatingGateway,
+ 		structs.ServiceKindMeshGateway,
+-		structs.ServiceKindIngressGateway,
+-		structs.ServiceKindAPIGateway:
++		structs.ServiceKindIngressGateway:
+ 		return nil, nil
++	case structs.ServiceKindAPIGateway:
++		return s.secretsFromSnapshotAPIGateway(cfgSnap)
+ 	default:
+ 		return nil, fmt.Errorf("Invalid service kind: %v", cfgSnap.Kind)
+ 	}
+ }
++
++// secretsFromSnapshotAPIGateway generates Envoy secrets for API gateway
++// file-system-certificate config entries
++func (s *ResourceGenerator) secretsFromSnapshotAPIGateway(cfgSnap *proxycfg.ConfigSnapshot) ([]proto.Message, error) {
++	var resources []proto.Message
++
++	// Generate secrets from file-system-certificates
++	cfgSnap.APIGateway.FileSystemCertificates.ForEachKey(func(ref structs.ResourceReference) bool {
++		cert, ok := cfgSnap.APIGateway.FileSystemCertificates.Get(ref)
++		if !ok || cert == nil {
++			return true // skip nil or missing entries
++		}
++
++		secret := &envoy_tls_v3.Secret{
++			Name: cert.Name,
++			Type: &envoy_tls_v3.Secret_TlsCertificate{
++				TlsCertificate: &envoy_tls_v3.TlsCertificate{
++					CertificateChain: &envoy_core_v3.DataSource{
++						Specifier: &envoy_core_v3.DataSource_Filename{
++							Filename: cert.Certificate,
++						},
++					},
++					PrivateKey: &envoy_core_v3.DataSource{
++						Specifier: &envoy_core_v3.DataSource_Filename{
++							Filename: cert.PrivateKey,
++						},
++					},
++				},
++			},
++		}
++
++		resources = append(resources, secret)
++		return true
++	})
++
++	return resources, nil
++}
+diff --git a/api/config_entry.go b/api/config_entry.go
+index ffc18a8..eae247f 100644
+--- a/api/config_entry.go
++++ b/api/config_entry.go
+@@ -29,13 +29,14 @@ const (
+ 	SamenessGroup      string = "sameness-group"
+ 	RateLimitIPConfig  string = "control-plane-request-limit"
+ 
+-	ProxyConfigGlobal string = "global"
+-	MeshConfigMesh    string = "mesh"
+-	APIGateway        string = "api-gateway"
+-	TCPRoute          string = "tcp-route"
+-	InlineCertificate string = "inline-certificate"
+-	HTTPRoute         string = "http-route"
+-	JWTProvider       string = "jwt-provider"
++	ProxyConfigGlobal     string = "global"
++	MeshConfigMesh        string = "mesh"
++	APIGateway            string = "api-gateway"
++	TCPRoute              string = "tcp-route"
++	InlineCertificate     string = "inline-certificate"
++	FileSystemCertificate string = "file-system-certificate"
++	HTTPRoute             string = "http-route"
++	JWTProvider           string = "jwt-provider"
+ )
+ 
+ const (
+@@ -449,6 +450,8 @@ func makeConfigEntry(kind, name string) (ConfigEntry, error) {
+ 		return &TCPRouteConfigEntry{Kind: kind, Name: name}, nil
+ 	case InlineCertificate:
+ 		return &InlineCertificateConfigEntry{Kind: kind, Name: name}, nil
++	case FileSystemCertificate:
++		return &FileSystemCertificateConfigEntry{Kind: kind, Name: name}, nil
+ 	case HTTPRoute:
+ 		return &HTTPRouteConfigEntry{Kind: kind, Name: name}, nil
+ 	case RateLimitIPConfig:
+diff --git a/api/config_entry_file_system_certificate.go b/api/config_entry_file_system_certificate.go
+new file mode 100644
+index 0000000..ef20178
+--- /dev/null
++++ b/api/config_entry_file_system_certificate.go
+@@ -0,0 +1,48 @@
++// Copyright (c) HashiCorp, Inc.
++// SPDX-License-Identifier: MPL-2.0
++
++package api
++
++// FileSystemCertificateConfigEntry manages the configuration for a TLS certificate
++// with the given name, where the certificate and private key are stored as files
++// on the local filesystem.
++type FileSystemCertificateConfigEntry struct {
++	// Kind of the config entry. This should be set to api.FileSystemCertificate.
++	Kind string
++
++	// Name is used to match the config entry with its associated api-gateway
++	// listener.
++	Name string
++
++	// Certificate is the path to the public certificate file on the local filesystem.
++	Certificate string
++	// PrivateKey is the path to the private key file on the local filesystem.
++	PrivateKey string `alias:"private_key"`
++
++	Meta map[string]string `json:",omitempty"`
++
++	// CreateIndex is the Raft index this entry was created at. This is a
++	// read-only field.
++	CreateIndex uint64
++
++	// ModifyIndex is used for the Check-And-Set operations and can also be fed
++	// back into the WaitIndex of the QueryOptions in order to perform blocking
++	// queries.
++	ModifyIndex uint64
++
++	// Partition is the partition the config entry is associated with.
++	// Partitioning is a Consul Enterprise feature.
++	Partition string `json:",omitempty"`
++
++	// Namespace is the namespace the config entry is associated with.
++	// Namespacing is a Consul Enterprise feature.
++	Namespace string `json:",omitempty"`
++}
++
++func (a *FileSystemCertificateConfigEntry) GetKind() string            { return FileSystemCertificate }
++func (a *FileSystemCertificateConfigEntry) GetName() string            { return a.Name }
++func (a *FileSystemCertificateConfigEntry) GetPartition() string       { return a.Partition }
++func (a *FileSystemCertificateConfigEntry) GetNamespace() string       { return a.Namespace }
++func (a *FileSystemCertificateConfigEntry) GetMeta() map[string]string { return a.Meta }
++func (a *FileSystemCertificateConfigEntry) GetCreateIndex() uint64     { return a.CreateIndex }
++func (a *FileSystemCertificateConfigEntry) GetModifyIndex() uint64     { return a.ModifyIndex }
+diff --git a/testing/deployer/sprawl/internal/build/docker.go b/testing/deployer/sprawl/internal/build/docker.go
+new file mode 100644
+index 0000000..53baa07
+--- /dev/null
++++ b/testing/deployer/sprawl/internal/build/docker.go
+@@ -0,0 +1,172 @@
++// Copyright (c) HashiCorp, Inc.
++// SPDX-License-Identifier: BUSL-1.1
++
++package build
++
++import (
++	"context"
++	"strings"
++
++	"github.com/hashicorp/go-hclog"
++
++	"github.com/hashicorp/consul/testing/deployer/sprawl/internal/runner"
++	"github.com/hashicorp/consul/testing/deployer/topology"
++)
++
++const dockerfileEnvoy = `
++ARG CONSUL_IMAGE
++ARG ENVOY_IMAGE
++FROM ${CONSUL_IMAGE}
++FROM ${ENVOY_IMAGE}
++COPY --from=0 /bin/consul /bin/consul
++`
++
++// FROM hashicorp/consul-dataplane:latest
++// COPY --from=busybox:uclibc /bin/sh /bin/sh
++// TODO: busybox:latest doesn't work, see https://hashicorp.slack.com/archives/C03EUN3QF1C/p1691784078972959
++const dockerfileDataplane = `
++ARG DATAPLANE_IMAGE
++FROM busybox:1.34
++FROM ${DATAPLANE_IMAGE}
++COPY --from=0 /bin/busybox /bin/busybox
++USER 0:0
++RUN ["busybox", "--install", "/bin", "-s"]
++USER 100:0
++ENTRYPOINT []
++`
++
++const dockerfileDataplaneForTProxy = `
++ARG DATAPLANE_IMAGE
++ARG CONSUL_IMAGE
++FROM ${CONSUL_IMAGE} AS consul
++FROM ${DATAPLANE_IMAGE} AS distroless
++FROM debian:bullseye-slim
++
++# undo the distroless aspect
++COPY --from=distroless /usr/local/bin/discover /usr/local/bin/
++COPY --from=distroless /usr/local/bin/envoy /usr/local/bin/
++COPY --from=distroless /usr/local/bin/consul-dataplane /usr/local/bin/
++COPY --from=distroless /licenses/copyright.txt /licenses/
++
++COPY --from=consul /bin/consul /bin/
++
++# Install iptables and sudo, needed for tproxy.
++RUN apt update -y \
++	&& apt install -y iptables sudo curl dnsutils
++
++RUN sed '/_apt/d' /etc/passwd > /etc/passwd.new \
++    && mv -f /etc/passwd.new /etc/passwd \
++    && adduser --uid=100 consul --no-create-home --disabled-password --system \
++	&& adduser consul sudo \
++	&& echo 'consul ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers
++
++COPY <<'EOF' /bin/tproxy-startup.sh
++#!/bin/sh
++
++set -ex
++
++# HACK: UID of consul in the consul-client container
++# This is conveniently also the UID of apt in the envoy container
++CONSUL_UID=100
++ENVOY_UID=$(id -u)
++
++# - We allow 19000 so that the test can directly visit the envoy admin page.
++# - We allow 20000 so that envoy can receive mTLS traffic from other nodes.
++# - We (reluctantly) allow 8080 so that we can bypass envoy and talk to fortio
++#   to do test assertions.
++sudo consul connect redirect-traffic \
++    -proxy-uid $ENVOY_UID \
++    -exclude-uid $CONSUL_UID \
++	-proxy-inbound-port=15001 \
++	-exclude-inbound-port=19000 \
++	-exclude-inbound-port=20000 \
++	-exclude-inbound-port=8080
++exec "$@"
++EOF
++
++RUN chmod +x /bin/tproxy-startup.sh \
++	&& chown 100:0 /bin/tproxy-startup.sh
++
++RUN echo 'consul ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers
++
++USER 100:0
++ENTRYPOINT []
++`
++
++func DockerImages(
++	logger hclog.Logger,
++	run *runner.Runner,
++	t *topology.Topology,
++) error {
++
++	built := make(map[string]struct{})
++	for _, c := range t.Clusters {
++		for _, n := range c.Nodes {
++			needsTproxy := n.NeedsTransparentProxy()
++
++			joint := n.Images.EnvoyConsulImage()
++			if _, ok := built[joint]; joint != "" && !ok {
++				logger.Info("building envoy+consul image", "image", joint)
++				logw := logger.Named("docker_envoy_consul").StandardWriter(&hclog.StandardLoggerOptions{ForceLevel: hclog.Debug})
++
++				err := run.DockerExecWithStderr(context.TODO(), []string{
++					"build",
++					// provenance causes non-idempotent builds, which leads to spurious terraform replacements
++					"--provenance=false",
++					"--build-arg",
++					"CONSUL_IMAGE=" + n.Images.Consul,
++					"--build-arg",
++					"ENVOY_IMAGE=" + n.Images.Envoy,
++					"-t", joint,
++					"-",
++				}, logw, logw, strings.NewReader(dockerfileEnvoy))
++				if err != nil {
++					return err
++				}
++
++				built[joint] = struct{}{}
++			}
++
++			cdp := n.Images.LocalDataplaneImage()
++			if _, ok := built[cdp]; cdp != "" && !ok {
++				logger.Info("building dataplane image", "image", cdp)
++				logw := logger.Named("docker_dataplane").StandardWriter(&hclog.StandardLoggerOptions{ForceLevel: hclog.Debug})
++				err := run.DockerExecWithStderr(context.TODO(), []string{
++					"build",
++					"--provenance=false",
++					"--build-arg",
++					"DATAPLANE_IMAGE=" + n.Images.Dataplane,
++					"-t", cdp,
++					"-",
++				}, logw, logw, strings.NewReader(dockerfileDataplane))
++				if err != nil {
++					return err
++				}
++
++				built[cdp] = struct{}{}
++			}
++
++			cdpTproxy := n.Images.LocalDataplaneTProxyImage()
++			if _, ok := built[cdpTproxy]; cdpTproxy != "" && !ok && needsTproxy {
++				logger.Info("building image", "image", cdpTproxy)
++				logw := logger.Named("docker_dataplane_tproxy").StandardWriter(&hclog.StandardLoggerOptions{ForceLevel: hclog.Debug})
++				err := run.DockerExecWithStderr(context.TODO(), []string{
++					"build",
++					"--build-arg",
++					"DATAPLANE_IMAGE=" + n.Images.Dataplane,
++					"--build-arg",
++					"CONSUL_IMAGE=" + n.Images.Consul,
++					"-t", cdpTproxy,
++					"-",
++				}, logw, logw, strings.NewReader(dockerfileDataplaneForTProxy))
++				if err != nil {
++					return err
++				}
++
++				built[cdpTproxy] = struct{}{}
++			}
++		}
++	}
++
++	return nil
++}
+diff --git a/ui/packages/consul-ui/app/styles/base/icons/icons/build/index.scss b/ui/packages/consul-ui/app/styles/base/icons/icons/build/index.scss
+new file mode 100644
+index 0000000..0cf5474
+--- /dev/null
++++ b/ui/packages/consul-ui/app/styles/base/icons/icons/build/index.scss
+@@ -0,0 +1,11 @@
++/**
++ * Copyright (c) HashiCorp, Inc.
++ * SPDX-License-Identifier: BUSL-1.1
++ */
++
++
++        @import './property-16';
++        @import './property-24';
++        @import './keyframes';
++        @import './placeholders';
++      
+\ No newline at end of file
+diff --git a/ui/packages/consul-ui/app/styles/base/icons/icons/build/keyframes.scss b/ui/packages/consul-ui/app/styles/base/icons/icons/build/keyframes.scss
+new file mode 100644
+index 0000000..4acc8d3
+--- /dev/null
++++ b/ui/packages/consul-ui/app/styles/base/icons/icons/build/keyframes.scss
+@@ -0,0 +1,14 @@
++/**
++ * Copyright (c) HashiCorp, Inc.
++ * SPDX-License-Identifier: BUSL-1.1
++ */
++
++@keyframes icon-build {
++  100% {
++
++    -webkit-mask-image: var(--icon-build-16);
++    mask-image: var(--icon-build-16);
++    background-color: var(--icon-color, var(--color-build-500, currentColor));
++
++  }
++}
+\ No newline at end of file
+diff --git a/ui/packages/consul-ui/app/styles/base/icons/icons/build/placeholders.scss b/ui/packages/consul-ui/app/styles/base/icons/icons/build/placeholders.scss
+new file mode 100644
+index 0000000..5472b58
+--- /dev/null
++++ b/ui/packages/consul-ui/app/styles/base/icons/icons/build/placeholders.scss
+@@ -0,0 +1,15 @@
++/**
++ * Copyright (c) HashiCorp, Inc.
++ * SPDX-License-Identifier: BUSL-1.1
++ */
++
++
++%with-build-icon {
++  --icon-name: icon-build;
++  content: '';
++}
++%with-build-mask {
++  --icon-name: icon-build;
++  content: '';
++}
++  
+\ No newline at end of file
+diff --git a/ui/packages/consul-ui/app/styles/base/icons/icons/build/property-16.scss b/ui/packages/consul-ui/app/styles/base/icons/icons/build/property-16.scss
+new file mode 100644
+index 0000000..cb7e051
+--- /dev/null
++++ b/ui/packages/consul-ui/app/styles/base/icons/icons/build/property-16.scss
+@@ -0,0 +1,8 @@
++/**
++ * Copyright (c) HashiCorp, Inc.
++ * SPDX-License-Identifier: BUSL-1.1
++ */
++
++:root {
++  --icon-build-16: url('data:image/svg+xml;charset=UTF-8,<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 16 16"><path fill="%23000" fill-rule="evenodd" d="M8.603 2.549A4.251 4.251 0 005.47 8.696a1.076 1.076 0 01-.255 1.312l-3 2.374a.75.75 0 01-.93-1.176l2.701-2.139A5.75 5.75 0 019.47 1.004c.53.02.924.363 1.066.797.137.42.035.902-.306 1.243L8.75 4.523v1.596l1.13 1.13h1.597l1.48-1.479a1.22 1.22 0 011.241-.306c.435.142.778.537.798 1.066a5.75 5.75 0 01-7.978 5.52l-2.102 2.664a.75.75 0 01-1.177-.928l2.333-2.959a1.076 1.076 0 011.297-.265 4.251 4.251 0 006.082-3.165L12.41 8.438c-.199.2-.47.312-.75.312h-1.96c-.282 0-.552-.112-.751-.312L7.56 7.052c-.2-.2-.311-.47-.311-.751V4.34c0-.281.112-.551.311-.75l1.042-1.042z" clip-rule="evenodd"/></svg>');
++}
+\ No newline at end of file
+diff --git a/ui/packages/consul-ui/app/styles/base/icons/icons/build/property-24.scss b/ui/packages/consul-ui/app/styles/base/icons/icons/build/property-24.scss
+new file mode 100644
+index 0000000..c7384bd
+--- /dev/null
++++ b/ui/packages/consul-ui/app/styles/base/icons/icons/build/property-24.scss
+@@ -0,0 +1,8 @@
++/**
++ * Copyright (c) HashiCorp, Inc.
++ * SPDX-License-Identifier: BUSL-1.1
++ */
++
++:root {
++  --icon-build-24: url('data:image/svg+xml;charset=UTF-8,<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><path fill="%23000" fill-rule="evenodd" d="M14.05 2.5a7.45 7.45 0 00-6.625 10.86 1.284 1.284 0 01-.29 1.556l-4.92 3.894a.75.75 0 01-.93-1.176l4.727-3.743a8.95 8.95 0 019.013-12.839c1.1.12 1.369 1.403.703 2.068L12.75 6.1v3.016l2.135 2.134H17.9l2.979-2.978c.665-.666 1.948-.396 2.067.703a8.95 8.95 0 01-12.704 9.078l-3.677 4.663a.75.75 0 01-1.178-.93l3.827-4.851a.763.763 0 01.059-.066 1.284 1.284 0 011.478-.236 7.45 7.45 0 0010.746-6.859l-2.606 2.607c-.237.236-.558.37-.893.37h-3.212c-.335 0-.657-.133-.893-.37l-2.274-2.274a1.262 1.262 0 01-.37-.893V6c0-.335.133-.656.37-.892l2.605-2.606a7.62 7.62 0 00-.175-.002z" clip-rule="evenodd"/></svg>');
++}
+\ No newline at end of file

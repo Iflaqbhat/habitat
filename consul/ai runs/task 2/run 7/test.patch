@@ -1,0 +1,169 @@
+diff --git a/agent/structs/config_entry_file_system_certificate__HABITAT_test.go b/agent/structs/config_entry_file_system_certificate__HABITAT_test.go
+new file mode 100644
+index 0000000000..e27162dd1e
+--- /dev/null
++++ b/agent/structs/config_entry_file_system_certificate__HABITAT_test.go
+@@ -0,0 +1,37 @@
++// Copyright (c) HashiCorp, Inc.
++// SPDX-License-Identifier: BUSL-1.1
++
++package structs
++
++import "testing"
++
++func TestFileSystemCertificate__HABITAT(t *testing.T) {
++	t.Parallel()
++
++	cases := map[string]configEntryTestcase{
++		"valid file system certificate": {
++			entry: &FileSystemCertificateConfigEntry{
++				Kind:        FileSystemCertificate,
++				Name:        "cert-one",
++				Certificate: "/path/to/certificate.crt",
++				PrivateKey:  "/path/to/private.key",
++			},
++		},
++		"file system certificate with meta": {
++			entry: &FileSystemCertificateConfigEntry{
++				Kind:        FileSystemCertificate,
++				Name:        "cert-two",
++				Certificate: "/opt/consul/tls/cert.pem",
++				PrivateKey:  "/opt/consul/tls/key.pem",
++				Meta:        map[string]string{"foo": "bar"},
++			},
++		},
++		"file system certificate with empty paths": {
++			entry: &FileSystemCertificateConfigEntry{
++				Kind: FileSystemCertificate,
++				Name: "cert-three",
++			},
++		},
++	}
++	testConfigEntryNormalizeAndValidate(t, cases)
++}
+diff --git a/agent/xds/secrets__HABITAT_test.go b/agent/xds/secrets__HABITAT_test.go
+new file mode 100644
+index 0000000000..bf7894bcfa
+--- /dev/null
++++ b/agent/xds/secrets__HABITAT_test.go
+@@ -0,0 +1,120 @@
++// Copyright (c) HashiCorp, Inc.
++// SPDX-License-Identifier: BUSL-1.1
++
++package xds
++
++import (
++	"testing"
++
++	envoy_tls_v3 "github.com/envoyproxy/go-control-plane/envoy/extensions/transport_sockets/tls/v3"
++	"github.com/stretchr/testify/require"
++
++	"github.com/hashicorp/consul/agent/proxycfg"
++	"github.com/hashicorp/consul/agent/structs"
++)
++
++func TestSecretsFromSnapshotAPIGateway_FileSystemCertificate__HABITAT(t *testing.T) {
++	t.Parallel()
++
++	gen := &ResourceGenerator{}
++
++	t.Run("file-system-certificate generates SDS secret with file paths", func(t *testing.T) {
++		snap := proxycfg.TestConfigSnapshotAPIGateway(t, "default", nil, nil, nil, nil, nil)
++
++		certRef := structs.ResourceReference{
++			Kind: structs.FileSystemCertificate,
++			Name: "my-cert",
++		}
++
++		certEntry := &structs.FileSystemCertificateConfigEntry{
++			Kind:        structs.FileSystemCertificate,
++			Name:        "my-cert",
++			Certificate: "/opt/consul/tls/api-gateway.crt",
++			PrivateKey:  "/opt/consul/tls/api-gateway.key",
++		}
++
++		snap.APIGateway.FileSystemCertificates.InitWatch(certRef, nil)
++		snap.APIGateway.FileSystemCertificates.Set(certRef, certEntry)
++
++		secrets, err := gen.secretsFromSnapshot(snap)
++		require.NoError(t, err)
++		require.Len(t, secrets, 1)
++
++		secret, ok := secrets[0].(*envoy_tls_v3.Secret)
++		require.True(t, ok)
++		require.Equal(t, "my-cert", secret.Name)
++
++		tlsCert := secret.GetTlsCertificate()
++		require.NotNil(t, tlsCert)
++
++		certChain := tlsCert.GetCertificateChain()
++		require.NotNil(t, certChain)
++		require.NotNil(t, certChain.GetFilename())
++		require.Equal(t, "/opt/consul/tls/api-gateway.crt", certChain.GetFilename())
++
++		privateKey := tlsCert.GetPrivateKey()
++		require.NotNil(t, privateKey)
++		require.NotNil(t, privateKey.GetFilename())
++		require.Equal(t, "/opt/consul/tls/api-gateway.key", privateKey.GetFilename())
++	})
++
++	t.Run("multiple file-system-certificates generate multiple secrets", func(t *testing.T) {
++		snap := proxycfg.TestConfigSnapshotAPIGateway(t, "default", nil, nil, nil, nil, nil)
++
++		cert1Ref := structs.ResourceReference{
++			Kind: structs.FileSystemCertificate,
++			Name: "cert1",
++		}
++		cert1Entry := &structs.FileSystemCertificateConfigEntry{
++			Kind:        structs.FileSystemCertificate,
++			Name:        "cert1",
++			Certificate: "/path/to/cert1.crt",
++			PrivateKey:  "/path/to/key1.key",
++		}
++
++		cert2Ref := structs.ResourceReference{
++			Kind: structs.FileSystemCertificate,
++			Name: "cert2",
++		}
++		cert2Entry := &structs.FileSystemCertificateConfigEntry{
++			Kind:        structs.FileSystemCertificate,
++			Name:        "cert2",
++			Certificate: "/path/to/cert2.crt",
++			PrivateKey:  "/path/to/key2.key",
++		}
++
++		snap.APIGateway.FileSystemCertificates.InitWatch(cert1Ref, nil)
++		snap.APIGateway.FileSystemCertificates.Set(cert1Ref, cert1Entry)
++		snap.APIGateway.FileSystemCertificates.InitWatch(cert2Ref, nil)
++		snap.APIGateway.FileSystemCertificates.Set(cert2Ref, cert2Entry)
++
++		secrets, err := gen.secretsFromSnapshot(snap)
++		require.NoError(t, err)
++		require.Len(t, secrets, 2)
++
++		secretNames := make(map[string]bool)
++		for _, secret := range secrets {
++			s, ok := secret.(*envoy_tls_v3.Secret)
++			require.True(t, ok)
++			secretNames[s.Name] = true
++		}
++		require.True(t, secretNames["cert1"])
++		require.True(t, secretNames["cert2"])
++	})
++
++	t.Run("nil file-system-certificate is skipped", func(t *testing.T) {
++		snap := proxycfg.TestConfigSnapshotAPIGateway(t, "default", nil, nil, nil, nil, nil)
++
++		certRef := structs.ResourceReference{
++			Kind: structs.FileSystemCertificate,
++			Name: "nil-cert",
++		}
++
++		snap.APIGateway.FileSystemCertificates.InitWatch(certRef, nil)
++		snap.APIGateway.FileSystemCertificates.Set(certRef, nil)
++
++		secrets, err := gen.secretsFromSnapshot(snap)
++		require.NoError(t, err)
++		require.Len(t, secrets, 0)
++	})
++}

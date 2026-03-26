@@ -1,0 +1,77 @@
+/**
+ * Copyright (c) HashiCorp, Inc.
+ * SPDX-License-Identifier: BUSL-1.1
+ */
+
+%hashicorp-consul {
+  .hds-side-nav {
+    height: auto;
+  }
+  .consul-side-nav {
+    li.consul-disabled-nav {
+      width: 100%;
+      min-height: var(--token-side-nav-body-list-item-height);
+      padding: var(--token-side-nav-body-list-item-padding-vertical)
+        var(--token-side-nav-body-list-item-padding-horizontal);
+      color: var(--token-color-foreground-faint);
+    }
+
+    li.consul-side-nav__selector {
+      .consul-side-nav__selector-toggle {
+        min-width: 15.5rem;
+
+        &:disabled {
+          color: var(--token-color-foreground-faint);
+          border-color: var(--token-color-border-primary);
+
+          &:hover {
+            background-color: transparent;
+          }
+        }
+      }
+
+      .hds-dropdown__content {
+        min-width: 15.5rem;
+        max-height: 500px;
+      }
+    }
+
+    .hds-side-nav__wrapper-body {
+      overflow-y: unset;
+      overflow-x: unset;
+    }
+
+    li.consul-side-nav__datacenter {
+      display: flex;
+      gap: 0.5rem;
+      align-items: center;
+      padding-left: 0.5rem;
+    }
+
+    .consul-side-nav__selector-group {
+      margin-bottom: 1.5rem;
+    }
+
+    .consul-datacenter-selector__dc-name {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      .consul-datacenter-selector__badges {
+        display: flex;
+        gap: 0.25rem;
+      }
+    }
+
+    .consul-side-nav__selector-title {
+      margin-top: 0.5rem;
+    }
+
+    .consul-side-nav__selector-description {
+      padding-top: 0.5rem;
+    }
+  }
+}
+
+.hashicorp-consul {
+  @extend %hashicorp-consul;
+}

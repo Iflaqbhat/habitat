@@ -1,0 +1,452 @@
+diff --git a/agent/consul/state/session.go b/agent/consul/state/session.go
+index d57b059..5bd80e1 100644
+--- a/agent/consul/state/session.go
++++ b/agent/consul/state/session.go
+@@ -13,6 +13,7 @@ import (
+ 
+ 	"github.com/hashicorp/consul/acl"
+ 	"github.com/hashicorp/consul/agent/structs"
++	"github.com/hashicorp/consul/api"
+ )
+ 
+ const (
+@@ -347,8 +348,15 @@ func (s *Store) deleteSessionTxn(tx WriteTxn, idx uint64, sessionID string, entM
+ 		return nil
+ 	}
+ 
+-	// Delete the session and write the new index.
++	// Get the session before deleting
+ 	session := sess.(*structs.Session)
++
++	// Update session-type health checks that reference this session's Name to critical
++	if err := updateSessionHealthChecks(tx, idx, session, api.HealthCritical, fmt.Sprintf("Session '%s' is invalid", session.ID)); err != nil {
++		return fmt.Errorf("failed updating session health checks: %s", err)
++	}
++
++	// Delete the session and write the new index.
+ 	if err := sessionDeleteWithSession(tx, session, idx); err != nil {
+ 		return fmt.Errorf("failed deleting session: %v", err)
+ 	}
+diff --git a/agent/consul/state/session_ce.go b/agent/consul/state/session_ce.go
+index 2fa2487..e4a5451 100644
+--- a/agent/consul/state/session_ce.go
++++ b/agent/consul/state/session_ce.go
+@@ -100,6 +100,11 @@ func insertSessionTxn(tx WriteTxn, session *structs.Session, idx uint64, updateM
+ 		}
+ 	}
+ 
++	// Update session-type health checks that reference this session's Name
++	if err := updateSessionHealthChecks(tx, idx, session, api.HealthPassing, fmt.Sprintf("Session '%s' in force", session.ID)); err != nil {
++		return fmt.Errorf("failed updating session health checks: %s", err)
++	}
++
+ 	// Update the index
+ 	if updateMax {
+ 		if err := indexUpdateMaxTxn(tx, idx, "sessions"); err != nil {
+@@ -115,6 +120,40 @@ func insertSessionTxn(tx WriteTxn, session *structs.Session, idx uint64, updateM
+ 	return nil
+ }
+ 
++// updateSessionHealthChecks finds all health checks on the same node with Type="session"
++// and Definition.SessionName matching the session's Name, and updates their status.
++func updateSessionHealthChecks(tx WriteTxn, idx uint64, session *structs.Session, status string, output string) error {
++	// Get all checks for this node
++	iter, err := catalogListChecksByNode(tx, Query{Value: session.Node})
++	if err != nil {
++		return fmt.Errorf("failed check lookup: %s", err)
++	}
++
++	var checksToUpdate []*structs.HealthCheck
++	for check := iter.Next(); check != nil; check = iter.Next() {
++		hc := check.(*structs.HealthCheck)
++		// Only update checks that are session type and match the session name
++		if hc.Type == "session" && hc.Definition.SessionName == session.Name {
++			checksToUpdate = append(checksToUpdate, hc)
++		}
++	}
++
++	// Update each matching check
++	for _, hc := range checksToUpdate {
++		// Clone the check to avoid modifying the original in-place
++		updated := hc.Clone()
++		updated.Status = status
++		updated.Output = output
++		updated.ModifyIndex = idx
++
++		if err := catalogInsertCheck(tx, updated, idx); err != nil {
++			return fmt.Errorf("failed updating check %s: %s", hc.CheckID, err)
++		}
++	}
++
++	return nil
++}
++
+ func allNodeSessionsTxn(tx ReadTxn, node string, _ string) (structs.Sessions, error) {
+ 	return nodeSessionsTxn(tx, nil, node, nil)
+ }
+@@ -150,9 +189,12 @@ func validateSessionChecksTxn(tx ReadTxn, session *structs.Session) error {
+ 			return fmt.Errorf("Missing check '%s' registration", checkID)
+ 		}
+ 
++		hc := check.(*structs.HealthCheck)
+ 		// Verify that the check is not in critical state
+-		status := check.(*structs.HealthCheck).Status
+-		if status == api.HealthCritical {
++		// Session type checks are allowed to be in critical state since they
++		// are expected to be critical before the session exists
++		status := hc.Status
++		if status == api.HealthCritical && hc.Type != "session" {
+ 			return fmt.Errorf("Check '%s' is in %s state", checkID, status)
+ 		}
+ 	}
+diff --git a/agent/structs/structs.go b/agent/structs/structs.go
+index cae14af..0fcdc6d 100644
+--- a/agent/structs/structs.go
++++ b/agent/structs/structs.go
+@@ -1913,6 +1913,7 @@ type HealthCheckDefinition struct {
+ 	AliasNode                      string              `json:",omitempty"`
+ 	AliasService                   string              `json:",omitempty"`
+ 	TTL                            time.Duration       `json:",omitempty"`
++	SessionName                    string              `json:",omitempty"`
+ }
+ 
+ func (d *HealthCheckDefinition) MarshalJSON() ([]byte, error) {
+diff --git a/api/health.go b/api/health.go
+index a023002..024fc32 100644
+--- a/api/health.go
++++ b/api/health.go
+@@ -75,6 +75,7 @@ type HealthCheckDefinition struct {
+ 	IntervalDuration                       time.Duration `json:"-"`
+ 	TimeoutDuration                        time.Duration `json:"-"`
+ 	DeregisterCriticalServiceAfterDuration time.Duration `json:"-"`
++	SessionName                            string
+ 
+ 	// DEPRECATED in Consul 1.4.1. Use the above time.Duration fields instead.
+ 	Interval                       ReadableDuration
+diff --git a/proto/private/pbservice/healthcheck.gen.go b/proto/private/pbservice/healthcheck.gen.go
+index 1c608d8..246e43f 100644
+--- a/proto/private/pbservice/healthcheck.gen.go
++++ b/proto/private/pbservice/healthcheck.gen.go
+@@ -161,6 +161,7 @@ func HealthCheckDefinitionToStructs(s *HealthCheckDefinition, t *structs.HealthC
+ 	t.AliasNode = s.AliasNode
+ 	t.AliasService = s.AliasService
+ 	t.TTL = structs.DurationFromProto(s.TTL)
++	t.SessionName = s.SessionName
+ }
+ func HealthCheckDefinitionFromStructs(t *structs.HealthCheckDefinition, s *HealthCheckDefinition) {
+ 	if s == nil {
+@@ -191,4 +192,5 @@ func HealthCheckDefinitionFromStructs(t *structs.HealthCheckDefinition, s *Healt
+ 	s.AliasNode = t.AliasNode
+ 	s.AliasService = t.AliasService
+ 	s.TTL = structs.DurationToProto(t.TTL)
++	s.SessionName = t.SessionName
+ }
+diff --git a/proto/private/pbservice/healthcheck.pb.go b/proto/private/pbservice/healthcheck.pb.go
+index 2524599..4bf86e9 100644
+--- a/proto/private/pbservice/healthcheck.pb.go
++++ b/proto/private/pbservice/healthcheck.pb.go
+@@ -300,7 +300,8 @@ type HealthCheckDefinition struct {
+ 	AliasNode                      string               `protobuf:"bytes,15,opt,name=AliasNode,proto3" json:"AliasNode,omitempty"`
+ 	AliasService                   string               `protobuf:"bytes,16,opt,name=AliasService,proto3" json:"AliasService,omitempty"`
+ 	// mog: func-to=structs.DurationFromProto func-from=structs.DurationToProto
+-	TTL *durationpb.Duration `protobuf:"bytes,17,opt,name=TTL,proto3" json:"TTL,omitempty"`
++	TTL         *durationpb.Duration `protobuf:"bytes,17,opt,name=TTL,proto3" json:"TTL,omitempty"`
++	SessionName string               `protobuf:"bytes,26,opt,name=SessionName,proto3" json:"SessionName,omitempty"`
+ }
+ 
+ func (x *HealthCheckDefinition) Reset() {
+@@ -510,6 +511,13 @@ func (x *HealthCheckDefinition) GetTTL() *durationpb.Duration {
+ 	return nil
+ }
+ 
++func (x *HealthCheckDefinition) GetSessionName() string {
++	if x != nil {
++		return x.SessionName
++	}
++	return ""
++}
++
+ // CheckType is used to create either the CheckMonitor or the CheckTTL.
+ // The following types are supported: Script, HTTP, TCP, Docker, TTL, GRPC,
+ // Alias. Script, H2PING,
+diff --git a/proto/private/pbservice/healthcheck.proto b/proto/private/pbservice/healthcheck.proto
+index d75a7fc..633e454 100644
+--- a/proto/private/pbservice/healthcheck.proto
++++ b/proto/private/pbservice/healthcheck.proto
+@@ -89,6 +89,7 @@ message HealthCheckDefinition {
+   string AliasService = 16;
+   // mog: func-to=structs.DurationFromProto func-from=structs.DurationToProto
+   google.protobuf.Duration TTL = 17;
++  string SessionName = 26;
+ }
+ 
+ // CheckType is used to create either the CheckMonitor or the CheckTTL.
+diff --git a/testing/deployer/sprawl/internal/build/docker.go b/testing/deployer/sprawl/internal/build/docker.go
+new file mode 100644
+index 0000000..bb24047
+--- /dev/null
++++ b/testing/deployer/sprawl/internal/build/docker.go
+@@ -0,0 +1,172 @@
++// Copyright (c) HashiCorp, Inc.
++// SPDX-License-Identifier: BUSL-1.1
++
++package build
++
++import (
++	"context"
++	"strings"
++
++	"github.com/hashicorp/go-hclog"
++
++	"github.com/hashicorp/consul/testing/deployer/sprawl/internal/runner"
++	"github.com/hashicorp/consul/testing/deployer/topology"
++)
++
++const dockerfileEnvoy = `
++ARG CONSUL_IMAGE
++ARG ENVOY_IMAGE
++FROM ${CONSUL_IMAGE}
++FROM ${ENVOY_IMAGE}
++COPY --from=0 /bin/consul /bin/consul
++`
++
++// FROM hashicorp/consul-dataplane:latest
++// COPY --from=busybox:uclibc /bin/sh /bin/sh
++// TODO: busybox:latest doesn't work, see https://hashicorp.slack.com/archives/C03EUN3QF1C/p1691784078972959
++const dockerfileDataplane = `
++ARG DATAPLANE_IMAGE
++FROM busybox:1.34
++FROM ${DATAPLANE_IMAGE}
++COPY --from=0 /bin/busybox /bin/busybox
++USER 0:0
++RUN ["busybox", "--install", "/bin", "-s"]
++USER 100:0
++ENTRYPOINT []
++`
++
++const dockerfileDataplaneForTProxy = `
++ARG DATAPLANE_IMAGE
++ARG CONSUL_IMAGE
++FROM ${CONSUL_IMAGE} AS consul
++FROM ${DATAPLANE_IMAGE} AS distroless
++FROM debian:bullseye-slim
++
++# undo the distroless aspect
++COPY --from=distroless /usr/local/bin/discover /usr/local/bin/
++COPY --from=distroless /usr/local/bin/envoy /usr/local/bin/
++COPY --from=distroless /usr/local/bin/consul-dataplane /usr/local/bin/
++COPY --from=distroless /licenses/copyright.txt /licenses/
++
++COPY --from=consul /bin/consul /bin/
++
++# Install iptables and sudo, needed for tproxy.
++RUN apt update -y \
++	&& apt install -y iptables sudo curl dnsutils
++
++RUN sed '/_apt/d' /etc/passwd > /etc/passwd.new \
++    && mv -f /etc/passwd.new /etc/passwd \
++    && adduser --uid=100 consul --no-create-home --disabled-password --system \
++	&& adduser consul sudo \
++	&& echo 'consul ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers
++
++COPY <<'EOF' /bin/tproxy-startup.sh
++#!/bin/sh
++
++set -ex
++
++# HACK: UID of consul in the consul-client container
++# This is conveniently also the UID of apt in the envoy container
++CONSUL_UID=100
++ENVOY_UID=$(id -u)
++
++# - We allow 19000 so that the test can directly visit the envoy admin page.
++# - We allow 20000 so that envoy can receive mTLS traffic from other nodes.
++# - We (reluctantly) allow 8080 so that we can bypass envoy and talk to fortio
++#   to do test assertions.
++sudo consul connect redirect-traffic \
++    -proxy-uid $ENVOY_UID \
++    -exclude-uid $CONSUL_UID \
++	-proxy-inbound-port=15001 \
++	-exclude-inbound-port=19000 \
++	-exclude-inbound-port=20000 \
++	-exclude-inbound-port=8080
++exec "$@"
++EOF
++
++RUN chmod +x /bin/tproxy-startup.sh \
++	&& chown 100:0 /bin/tproxy-startup.sh
++
++RUN echo 'consul ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers
++
++USER 100:0
++ENTRYPOINT []
++`
++
++func DockerImages(
++	logger hclog.Logger,
++	run *runner.Runner,
++	t *topology.Topology,
++) error {
++
++	built := make(map[string]struct{})
++	for _, c := range t.Clusters {
++		for _, n := range c.Nodes {
++			const needsTproxy = false // TODO: see if we can bring this back for v1 CDP
++
++			joint := n.Images.EnvoyConsulImage()
++			if _, ok := built[joint]; joint != "" && !ok {
++				logger.Info("building envoy+consul image", "image", joint)
++				logw := logger.Named("docker_envoy_consul").StandardWriter(&hclog.StandardLoggerOptions{ForceLevel: hclog.Debug})
++
++				err := run.DockerExecWithStderr(context.TODO(), []string{
++					"build",
++					// provenance causes non-idempotent builds, which leads to spurious terraform replacements
++					"--provenance=false",
++					"--build-arg",
++					"CONSUL_IMAGE=" + n.Images.Consul,
++					"--build-arg",
++					"ENVOY_IMAGE=" + n.Images.Envoy,
++					"-t", joint,
++					"-",
++				}, logw, logw, strings.NewReader(dockerfileEnvoy))
++				if err != nil {
++					return err
++				}
++
++				built[joint] = struct{}{}
++			}
++
++			cdp := n.Images.LocalDataplaneImage()
++			if _, ok := built[cdp]; cdp != "" && !ok {
++				logger.Info("building dataplane image", "image", cdp)
++				logw := logger.Named("docker_dataplane").StandardWriter(&hclog.StandardLoggerOptions{ForceLevel: hclog.Debug})
++				err := run.DockerExecWithStderr(context.TODO(), []string{
++					"build",
++					"--provenance=false",
++					"--build-arg",
++					"DATAPLANE_IMAGE=" + n.Images.Dataplane,
++					"-t", cdp,
++					"-",
++				}, logw, logw, strings.NewReader(dockerfileDataplane))
++				if err != nil {
++					return err
++				}
++
++				built[cdp] = struct{}{}
++			}
++
++			cdpTproxy := n.Images.LocalDataplaneTProxyImage()
++			if _, ok := built[cdpTproxy]; cdpTproxy != "" && !ok && needsTproxy {
++				logger.Info("building image", "image", cdpTproxy)
++				logw := logger.Named("docker_dataplane_tproxy").StandardWriter(&hclog.StandardLoggerOptions{ForceLevel: hclog.Debug})
++				err := run.DockerExecWithStderr(context.TODO(), []string{
++					"build",
++					"--build-arg",
++					"DATAPLANE_IMAGE=" + n.Images.Dataplane,
++					"--build-arg",
++					"CONSUL_IMAGE=" + n.Images.Consul,
++					"-t", cdpTproxy,
++					"-",
++				}, logw, logw, strings.NewReader(dockerfileDataplaneForTProxy))
++				if err != nil {
++					return err
++				}
++
++				built[cdpTproxy] = struct{}{}
++			}
++		}
++	}
++
++	return nil
++}
+diff --git a/ui/packages/consul-ui/app/styles/base/icons/icons/build/index.scss b/ui/packages/consul-ui/app/styles/base/icons/icons/build/index.scss
+new file mode 100644
+index 0000000..0cf5474
+--- /dev/null
++++ b/ui/packages/consul-ui/app/styles/base/icons/icons/build/index.scss
+@@ -0,0 +1,11 @@
++/**
++ * Copyright (c) HashiCorp, Inc.
++ * SPDX-License-Identifier: BUSL-1.1
++ */
++
++
++        @import './property-16';
++        @import './property-24';
++        @import './keyframes';
++        @import './placeholders';
++      
+\ No newline at end of file
+diff --git a/ui/packages/consul-ui/app/styles/base/icons/icons/build/keyframes.scss b/ui/packages/consul-ui/app/styles/base/icons/icons/build/keyframes.scss
+new file mode 100644
+index 0000000..4acc8d3
+--- /dev/null
++++ b/ui/packages/consul-ui/app/styles/base/icons/icons/build/keyframes.scss
+@@ -0,0 +1,14 @@
++/**
++ * Copyright (c) HashiCorp, Inc.
++ * SPDX-License-Identifier: BUSL-1.1
++ */
++
++@keyframes icon-build {
++  100% {
++
++    -webkit-mask-image: var(--icon-build-16);
++    mask-image: var(--icon-build-16);
++    background-color: var(--icon-color, var(--color-build-500, currentColor));
++
++  }
++}
+\ No newline at end of file
+diff --git a/ui/packages/consul-ui/app/styles/base/icons/icons/build/placeholders.scss b/ui/packages/consul-ui/app/styles/base/icons/icons/build/placeholders.scss
+new file mode 100644
+index 0000000..5472b58
+--- /dev/null
++++ b/ui/packages/consul-ui/app/styles/base/icons/icons/build/placeholders.scss
+@@ -0,0 +1,15 @@
++/**
++ * Copyright (c) HashiCorp, Inc.
++ * SPDX-License-Identifier: BUSL-1.1
++ */
++
++
++%with-build-icon {
++  --icon-name: icon-build;
++  content: '';
++}
++%with-build-mask {
++  --icon-name: icon-build;
++  content: '';
++}
++  
+\ No newline at end of file
+diff --git a/ui/packages/consul-ui/app/styles/base/icons/icons/build/property-16.scss b/ui/packages/consul-ui/app/styles/base/icons/icons/build/property-16.scss
+new file mode 100644
+index 0000000..cb7e051
+--- /dev/null
++++ b/ui/packages/consul-ui/app/styles/base/icons/icons/build/property-16.scss
+@@ -0,0 +1,8 @@
++/**
++ * Copyright (c) HashiCorp, Inc.
++ * SPDX-License-Identifier: BUSL-1.1
++ */
++
++:root {
++  --icon-build-16: url('data:image/svg+xml;charset=UTF-8,<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 16 16"><path fill="%23000" fill-rule="evenodd" d="M8.603 2.549A4.251 4.251 0 005.47 8.696a1.076 1.076 0 01-.255 1.312l-3 2.374a.75.75 0 01-.93-1.176l2.701-2.139A5.75 5.75 0 019.47 1.004c.53.02.924.363 1.066.797.137.42.035.902-.306 1.243L8.75 4.523v1.596l1.13 1.13h1.597l1.48-1.479a1.22 1.22 0 011.241-.306c.435.142.778.537.798 1.066a5.75 5.75 0 01-7.978 5.52l-2.102 2.664a.75.75 0 01-1.177-.928l2.333-2.959a1.076 1.076 0 011.297-.265 4.251 4.251 0 006.082-3.165L12.41 8.438c-.199.2-.47.312-.75.312h-1.96c-.282 0-.552-.112-.751-.312L7.56 7.052c-.2-.2-.311-.47-.311-.751V4.34c0-.281.112-.551.311-.75l1.042-1.042z" clip-rule="evenodd"/></svg>');
++}
+\ No newline at end of file
+diff --git a/ui/packages/consul-ui/app/styles/base/icons/icons/build/property-24.scss b/ui/packages/consul-ui/app/styles/base/icons/icons/build/property-24.scss
+new file mode 100644
+index 0000000..c7384bd
+--- /dev/null
++++ b/ui/packages/consul-ui/app/styles/base/icons/icons/build/property-24.scss
+@@ -0,0 +1,8 @@
++/**
++ * Copyright (c) HashiCorp, Inc.
++ * SPDX-License-Identifier: BUSL-1.1
++ */
++
++:root {
++  --icon-build-24: url('data:image/svg+xml;charset=UTF-8,<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><path fill="%23000" fill-rule="evenodd" d="M14.05 2.5a7.45 7.45 0 00-6.625 10.86 1.284 1.284 0 01-.29 1.556l-4.92 3.894a.75.75 0 01-.93-1.176l4.727-3.743a8.95 8.95 0 019.013-12.839c1.1.12 1.369 1.403.703 2.068L12.75 6.1v3.016l2.135 2.134H17.9l2.979-2.978c.665-.666 1.948-.396 2.067.703a8.95 8.95 0 01-12.704 9.078l-3.677 4.663a.75.75 0 01-1.178-.93l3.827-4.851a.763.763 0 01.059-.066 1.284 1.284 0 011.478-.236 7.45 7.45 0 0010.746-6.859l-2.606 2.607c-.237.236-.558.37-.893.37h-3.212c-.335 0-.657-.133-.893-.37l-2.274-2.274a1.262 1.262 0 01-.37-.893V6c0-.335.133-.656.37-.892l2.605-2.606a7.62 7.62 0 00-.175-.002z" clip-rule="evenodd"/></svg>');
++}
+\ No newline at end of file

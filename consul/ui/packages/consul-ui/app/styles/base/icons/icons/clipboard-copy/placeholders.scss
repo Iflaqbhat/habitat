@@ -1,0 +1,15 @@
+/**
+ * Copyright (c) HashiCorp, Inc.
+ * SPDX-License-Identifier: BUSL-1.1
+ */
+
+
+%with-clipboard-copy-icon {
+  --icon-name: icon-clipboard-copy;
+  content: '';
+}
+%with-clipboard-copy-mask {
+  --icon-name: icon-clipboard-copy;
+  content: '';
+}
+  

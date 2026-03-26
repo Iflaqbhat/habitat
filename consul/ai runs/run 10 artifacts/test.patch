@@ -1,0 +1,215 @@
+diff --git a/agent/consul/state/session_health_check__HABITAT_test.go b/agent/consul/state/session_health_check__HABITAT_test.go
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/agent/consul/state/session_health_check__HABITAT_test.go
+@@ -0,0 +1,209 @@
++// Copyright (c) HashiCorp, Inc.
++// SPDX-License-Identifier: BUSL-1.1
++
++package state
++
++import (
++	"testing"
++
++	"github.com/hashicorp/consul/agent/structs"
++	"github.com/hashicorp/consul/api"
++	"github.com/hashicorp/consul/types"
++)
++
++// Test that session creation fails when a non-session check is in critical state
++func TestHealthCheck_SessionRegistrationFail__HABITAT(t *testing.T) {
++	s := testStateStore(t)
++
++	var check *structs.HealthCheck
++	// setup node
++	testRegisterNode(t, s, 1, "foo-node")
++	testRegisterCheckCustom__HABITAT(t, s, 1, "foo", func(chk *structs.HealthCheck) {
++		chk.Node = "foo-node"
++		chk.Type = "tll"
++		chk.Status = api.HealthCritical
++		chk.Definition = structs.HealthCheckDefinition{
++			SessionName: "test-session",
++		}
++		check = chk
++	})
++
++	// Ensure the index was not updated if nothing was destroyed.
++	if idx := s.maxIndex("sessions"); idx != 0 {
++		t.Fatalf("bad index: %d", idx)
++	}
++
++	// Register a new session
++	sess := &structs.Session{
++		ID:     testUUID(),
++		Node:   "foo-node",
++		Name:   "test-session",
++		Checks: make([]types.CheckID, 0),
++	}
++
++	sess.Checks = append(sess.Checks, check.CheckID)
++	// assert the check is critical initially
++	assertHealthCheckStatusAndOutput__HABITAT(t, s, sess, check.CheckID, api.HealthCritical, "")
++
++	if err := s.SessionCreate(2, sess); err == nil {
++		// expecting error: Check 'foo' is in critical state
++		t.Fatalf("expected error, got nil")
++	}
++}
++
++// Allow the session to be created even if the check is critical when it's a session type check
++func TestHealthCheck_SessionRegistrationAllow__HABITAT(t *testing.T) {
++	s := testStateStore(t)
++
++	var check *structs.HealthCheck
++	// setup node
++	testRegisterNode(t, s, 1, "foo-node")
++	testRegisterCheckCustom__HABITAT(t, s, 1, "foo", func(chk *structs.HealthCheck) {
++		chk.Node = "foo-node"
++		chk.Type = "session"
++		chk.Status = api.HealthCritical
++		chk.Definition = structs.HealthCheckDefinition{
++			SessionName: "test-session",
++		}
++		check = chk
++	})
++
++	// Ensure the index was not updated if nothing was destroyed.
++	if idx := s.maxIndex("sessions"); idx != 0 {
++		t.Fatalf("bad index: %d", idx)
++	}
++
++	// Register a new session
++	sess := &structs.Session{
++		ID:     testUUID(),
++		Node:   "foo-node",
++		Name:   "test-session",
++		Checks: make([]types.CheckID, 0),
++	}
++
++	sess.Checks = append(sess.Checks, check.CheckID)
++	// assert the check is critical initially
++	assertHealthCheckStatusAndOutput__HABITAT(t, s, sess, check.CheckID, api.HealthCritical, "")
++
++	if err := s.SessionCreate(2, sess); err != nil {
++		t.Fatalf("The system shall allow session to be created ignoring the session check is critical. err: %s", err)
++	}
++}
++
++// Test that session health check status and output are updated when session is created and destroyed
++func TestHealthCheck_Session__HABITAT(t *testing.T) {
++	s := testStateStore(t)
++
++	var check *structs.HealthCheck
++	// setup node
++	testRegisterNode(t, s, 1, "foo-node")
++	testRegisterCheckCustom__HABITAT(t, s, 1, "foo", func(chk *structs.HealthCheck) {
++		chk.Node = "foo-node"
++		chk.Type = "session"
++		chk.Status = api.HealthCritical
++		chk.Definition = structs.HealthCheckDefinition{
++			SessionName: "test-session",
++		}
++		check = chk
++	})
++
++	// Ensure the index was not updated if nothing was destroyed.
++	if idx := s.maxIndex("sessions"); idx != 0 {
++		t.Fatalf("bad index: %d", idx)
++	}
++
++	// Register a new session
++	sess := &structs.Session{
++		ID:   testUUID(),
++		Node: "foo-node",
++		Name: "test-session",
++	}
++	// assert the check is critical initially
++	assertHealthCheckStatusAndOutput__HABITAT(t, s, sess, check.CheckID, api.HealthCritical, "")
++
++	if err := s.SessionCreate(2, sess); err != nil {
++		t.Fatalf("The system shall allow session to be created ignoring the session check is critical. err: %s", err)
++	}
++	// assert the check is passing after session creation with correct output
++	expectedOutput := "Session '" + sess.ID + "' in force"
++	assertHealthCheckStatusAndOutput__HABITAT(t, s, sess, check.CheckID, api.HealthPassing, expectedOutput)
++
++	// Destroy the session.
++	if err := s.SessionDestroy(3, sess.ID, nil); err != nil {
++		t.Fatalf("err: %s", err)
++	}
++	// assert the check is critical after session destroy with correct output
++	expectedOutputInvalid := "Session '" + sess.ID + "' is invalid"
++	assertHealthCheckStatusAndOutput__HABITAT(t, s, sess, check.CheckID, api.HealthCritical, expectedOutputInvalid)
++}
++
++// Test that session can be created and destroyed successfully when no matching health checks exist
++func TestHealthCheck_SessionNoMatchingChecks__HABITAT(t *testing.T) {
++	s := testStateStore(t)
++
++	// setup node
++	testRegisterNode(t, s, 1, "foo-node")
++
++	// Register a new session with no matching health checks
++	sess := &structs.Session{
++		ID:   testUUID(),
++		Node: "foo-node",
++		Name: "test-session",
++	}
++
++	// Session creation should succeed even when no matching checks exist
++	if err := s.SessionCreate(2, sess); err != nil {
++		t.Fatalf("Session creation should succeed when no matching checks exist. err: %s", err)
++	}
++
++	// Session destruction should also succeed when no matching checks exist
++	if err := s.SessionDestroy(3, sess.ID, nil); err != nil {
++		t.Fatalf("Session destruction should succeed when no matching checks exist. err: %s", err)
++	}
++}
++
++// Helper function to assert both status and output of a health check
++func assertHealthCheckStatusAndOutput__HABITAT(t *testing.T, s *Store, session *structs.Session, checkID types.CheckID, expectedStatus string, expectedOutput string) {
++	_, hc, err := s.NodeChecks(nil, session.Node, structs.DefaultEnterpriseMetaInPartition(""), structs.DefaultPeerKeyword)
++	if err != nil {
++		t.Fatalf("err: %s", err)
++	}
++	// assert the check status and output
++	for _, c := range hc {
++		if c.CheckID == checkID {
++			if c.Status != expectedStatus {
++				t.Fatalf("check is expected to be %s but actually it is %s", expectedStatus, c.Status)
++			}
++			if expectedOutput != "" && c.Output != expectedOutput {
++				t.Fatalf("check output is expected to be %q but actually it is %q", expectedOutput, c.Output)
++			}
++			return
++		}
++	}
++
++	t.Fatalf("check %s, is not found", string(checkID))
++}
++
++// Helper function to register a check with custom configuration
++func testRegisterCheckCustom__HABITAT(t *testing.T, s *Store, idx uint64, checkID types.CheckID, update func(chk *structs.HealthCheck)) {
++	chk := &structs.HealthCheck{
++		CheckID:        checkID,
++		EnterpriseMeta: *structs.DefaultEnterpriseMetaInPartition(""),
++	}
++
++	update(chk)
++
++	if err := s.EnsureCheck(idx, chk); err != nil {
++		t.Fatalf("err: %s", err)
++	}
++
++	tx := s.db.Txn(false)
++	defer tx.Abort()
++	c, err := tx.First(tableChecks, indexID, NodeCheckQuery{Node: chk.Node, CheckID: string(checkID), EnterpriseMeta: chk.EnterpriseMeta})
++	if err != nil {
++		t.Fatalf("err: %s", err)
++	}
++	if result, ok := c.(*structs.HealthCheck); !ok || result.CheckID != checkID {
++		t.Fatalf("bad check: %#v", result)
++	}
++}

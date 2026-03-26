@@ -1,0 +1,21 @@
+{{!
+  Copyright (c) HashiCorp, Inc.
+  SPDX-License-Identifier: BUSL-1.1
+}}
+
+{{#let (hash main=(concat this.guid '-main') Notification=(component 'app/notification')) as |exported|}}
+
+  <div class='app' ...attributes>
+    <ModalLayer />
+
+    {{yield exported to='sideNav'}}
+    <main id={{concat this.guid '-main'}}>
+      <div class='notifications'>
+        {{yield exported to='notifications'}}
+        <PortalTarget @name='app-notifications' @multiple={{true}} />
+      </div>
+      {{yield exported to='main'}}
+    </main>
+  </div>
+
+{{/let}}
