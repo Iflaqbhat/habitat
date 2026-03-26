@@ -1,0 +1,424 @@
+diff --git a/packages/babel-plugin-proposal-decorators/test/fixtures/2021-12-methods--to-es2015/private-with-initializers__HABITAT/exec.js b/packages/babel-plugin-proposal-decorators/test/fixtures/2021-12-methods--to-es2015/private-with-initializers__HABITAT/exec.js
+new file mode 100644
+index 0000000000..5a3ce1785f
+--- /dev/null
++++ b/packages/babel-plugin-proposal-decorators/test/fixtures/2021-12-methods--to-es2015/private-with-initializers__HABITAT/exec.js
+@@ -0,0 +1,41 @@
++function dec(fn, context) {
++  context.addInitializer((instance) => {
++    instance[context.name + 'Context'] = context;
++  });
++
++  return function () {
++    return fn.call(this) + 1;
++  }
++}
++
++class Foo {
++  value = 1;
++
++  @dec
++  #a() {
++    return this.value;
++  }
++
++  callA() {
++    return this.#a();
++  }
++}
++
++let foo = new Foo();
++
++const aContext = foo['#aContext'];
++
++// First call gets the method, second call calls the method with correct `this`
++expect(aContext.access.get.call(foo).call(foo)).toBe(2);
++expect(foo.callA()).toBe(2);
++foo.value = 123;
++expect(aContext.access.get.call(foo).call(foo)).toBe(124);
++expect(foo.callA()).toBe(124);
++
++expect(aContext.name).toBe('#a');
++expect(aContext.kind).toBe('method');
++expect(aContext.isStatic).toBe(false);
++expect(aContext.isPrivate).toBe(true);
++expect(typeof aContext.addInitializer).toBe('function');
++expect(typeof aContext.setMetadata).toBe('function');
++expect(typeof aContext.getMetadata).toBe('function');
+diff --git a/packages/babel-plugin-proposal-decorators/test/fixtures/2021-12-methods--to-es2015/public-with-initializers__HABITAT/exec.js b/packages/babel-plugin-proposal-decorators/test/fixtures/2021-12-methods--to-es2015/public-with-initializers__HABITAT/exec.js
+new file mode 100644
+index 0000000000..0f27b61caa
+--- /dev/null
++++ b/packages/babel-plugin-proposal-decorators/test/fixtures/2021-12-methods--to-es2015/public-with-initializers__HABITAT/exec.js
+@@ -0,0 +1,50 @@
++function dec(fn, context) {
++  context.addInitializer((instance) => {
++    instance[context.name + 'Context'] = context;
++  });
++
++  return function () {
++    return fn.call(this) + 1;
++  }
++}
++
++class Foo {
++  value = 1;
++
++  @dec
++  a() {
++    return this.value;
++  }
++
++  @dec
++  ['b']() {
++    return this.value;
++  }
++}
++
++let foo = new Foo();
++
++const aContext = foo['aContext'];
++const bContext = foo['bContext'];
++
++expect(foo.a()).toBe(2);
++expect(foo.b()).toBe(2);
++foo.value = 123;
++expect(foo.a()).toBe(124);
++expect(foo.b()).toBe(124);
++
++expect(aContext.name).toBe('a');
++expect(aContext.kind).toBe('method');
++expect(aContext.isStatic).toBe(false);
++expect(aContext.isPrivate).toBe(false);
++expect(typeof aContext.addInitializer).toBe('function');
++expect(typeof aContext.setMetadata).toBe('function');
++expect(typeof aContext.getMetadata).toBe('function');
++
++expect(bContext.name).toBe('b');
++expect(bContext.kind).toBe('method');
++expect(bContext.isStatic).toBe(false);
++expect(bContext.isPrivate).toBe(false);
++expect(typeof bContext.addInitializer).toBe('function');
++expect(typeof bContext.setMetadata).toBe('function');
++expect(typeof bContext.getMetadata).toBe('function');
+diff --git a/packages/babel-plugin-proposal-decorators/test/fixtures/2021-12-methods--to-es2015/static-private-with-initializers__HABITAT/exec.js b/packages/babel-plugin-proposal-decorators/test/fixtures/2021-12-methods--to-es2015/static-private-with-initializers__HABITAT/exec.js
+new file mode 100644
+index 0000000000..bab58275b4
+--- /dev/null
++++ b/packages/babel-plugin-proposal-decorators/test/fixtures/2021-12-methods--to-es2015/static-private-with-initializers__HABITAT/exec.js
+@@ -0,0 +1,39 @@
++function dec(fn, context) {
++  context.addInitializer((instance) => {
++    instance[context.name + 'Context'] = context;
++  });
++
++  return function () {
++    return fn.call(this) + 1;
++  }
++}
++
++class Foo {
++  static value = 1;
++
++  @dec
++  static #a() {
++    return this.value;
++  }
++
++  static callA() {
++    return this.#a();
++  }
++}
++
++const aContext = Foo['#aContext'];
++
++// First call gets the method, second call calls the method with correct `this`
++expect(aContext.access.get.call(Foo).call(Foo)).toBe(2);
++expect(Foo.callA()).toBe(2);
++Foo.value = 123;
++expect(aContext.access.get.call(Foo).call(Foo)).toBe(124);
++expect(Foo.callA()).toBe(124);
++
++expect(aContext.name).toBe('#a');
++expect(aContext.kind).toBe('method');
++expect(aContext.isStatic).toBe(true);
++expect(aContext.isPrivate).toBe(true);
++expect(typeof aContext.addInitializer).toBe('function');
++expect(typeof aContext.setMetadata).toBe('function');
++expect(typeof aContext.getMetadata).toBe('function');
+diff --git a/packages/babel-plugin-proposal-decorators/test/fixtures/2021-12-methods--to-es2015/static-public-with-initializers__HABITAT/exec.js b/packages/babel-plugin-proposal-decorators/test/fixtures/2021-12-methods--to-es2015/static-public-with-initializers__HABITAT/exec.js
+new file mode 100644
+index 0000000000..e68458db59
+--- /dev/null
++++ b/packages/babel-plugin-proposal-decorators/test/fixtures/2021-12-methods--to-es2015/static-public-with-initializers__HABITAT/exec.js
+@@ -0,0 +1,48 @@
++function dec(fn, context) {
++  context.addInitializer((instance) => {
++    instance[context.name + 'Context'] = context;
++  });
++
++  return function () {
++    return fn.call(this) + 1;
++  }
++}
++
++class Foo {
++  static value = 1;
++
++  @dec
++  static a() {
++    return this.value;
++  }
++
++  @dec
++  static ['b']() {
++    return this.value;
++  }
++}
++
++const aContext = Foo['aContext'];
++const bContext = Foo['bContext'];
++
++expect(Foo.a()).toBe(2);
++expect(Foo.b()).toBe(2);
++Foo.value = 123;
++expect(Foo.a()).toBe(124);
++expect(Foo.b()).toBe(124);
++
++expect(aContext.name).toBe('a');
++expect(aContext.kind).toBe('method');
++expect(aContext.isStatic).toBe(true);
++expect(aContext.isPrivate).toBe(false);
++expect(typeof aContext.addInitializer).toBe('function');
++expect(typeof aContext.setMetadata).toBe('function');
++expect(typeof aContext.getMetadata).toBe('function');
++
++expect(bContext.name).toBe('b');
++expect(bContext.kind).toBe('method');
++expect(bContext.isStatic).toBe(true);
++expect(bContext.isPrivate).toBe(false);
++expect(typeof bContext.addInitializer).toBe('function');
++expect(typeof bContext.setMetadata).toBe('function');
++expect(typeof bContext.getMetadata).toBe('function');
+diff --git a/packages/babel-plugin-proposal-decorators/test/fixtures/2021-12-methods--to-es2015/applyDecs-member-and-class-decorator__HABITAT/exec.js b/packages/babel-plugin-proposal-decorators/test/fixtures/2021-12-methods--to-es2015/applyDecs-member-and-class-decorator__HABITAT/exec.js
+new file mode 100644
+index 0000000000..f6b5d3bf4b
+--- /dev/null
++++ b/packages/babel-plugin-proposal-decorators/test/fixtures/2021-12-methods--to-es2015/applyDecs-member-and-class-decorator__HABITAT/exec.js
+@@ -0,0 +1,39 @@
++function memberDec(fn, context) {
++  return function () {
++    return fn.call(this) + 1;
++  };
++}
++
++function classDec(klass, context) {
++  expect(context.kind).toBe("class");
++  return class Wrapped extends klass {
++    static get original() {
++      return klass;
++    }
++  };
++}
++
++let Foo;
++@classDec
++class Foo_ {
++  value = 1;
++
++  @memberDec
++  #m() {
++    return this.value;
++  }
++
++  callM() {
++    return this.#m();
++  }
++}
++
++Foo = Foo_;
++
++expect(Foo).not.toBe(Foo_);
++expect(Foo.name).toBe("Wrapped");
++expect(Foo.original).toBe(Foo_);
++
++const inst = new Foo();
++expect(inst.callM()).toBe(2);
++expect(inst.value).toBe(1);
+diff --git a/packages/babel-plugin-proposal-decorators/test/fixtures/2021-12-methods--to-es2015/applyDecs-multiple-members-no-class-decorator__HABITAT/exec.js b/packages/babel-plugin-proposal-decorators/test/fixtures/2021-12-methods--to-es2015/applyDecs-multiple-members-no-class-decorator__HABITAT/exec.js
+new file mode 100644
+index 0000000000..b0e5465922
+--- /dev/null
++++ b/packages/babel-plugin-proposal-decorators/test/fixtures/2021-12-methods--to-es2015/applyDecs-multiple-members-no-class-decorator__HABITAT/exec.js
+@@ -0,0 +1,39 @@
++function dec(fn, context) {
++  context.addInitializer((instance) => {
++    instance[context.name + "Context"] = context;
++  });
++  return function () {
++    return fn.call(this) + 10;
++  };
++}
++
++class Foo {
++  value = 1;
++
++  @dec
++  #a() {
++    return this.value;
++  }
++
++  @dec
++  #b() {
++    return this.value * 2;
++  }
++
++  callA() {
++    return this.#a();
++  }
++  callB() {
++    return this.#b();
++  }
++}
++
++let foo = new Foo();
++expect(foo.callA()).toBe(11);
++expect(foo.callB()).toBe(12);
++expect(foo["#aContext"].name).toBe("#a");
++expect(foo["#bContext"].name).toBe("#b");
++
++foo.value = 5;
++expect(foo.callA()).toBe(15);
++expect(foo.callB()).toBe(20);
+diff --git a/packages/babel-plugin-proposal-decorators/test/fixtures/2021-12-methods--to-es2015/applyDecs-no-class-decorator__HABITAT/exec.js b/packages/babel-plugin-proposal-decorators/test/fixtures/2021-12-methods--to-es2015/applyDecs-no-class-decorator__HABITAT/exec.js
+new file mode 100644
+index 0000000000..d0d76a9cb6
+--- /dev/null
++++ b/packages/babel-plugin-proposal-decorators/test/fixtures/2021-12-methods--to-es2015/applyDecs-no-class-decorator__HABITAT/exec.js
+@@ -0,0 +1,38 @@
++function dec(fn, context) {
++  context.addInitializer((instance) => {
++    instance[context.name + "Context"] = context;
++  });
++  return function () {
++    return fn.call(this) + 1;
++  };
++}
++
++class Foo {
++  value = 1;
++
++  @dec
++  #a() {
++    return this.value;
++  }
++
++  callA() {
++    return this.#a();
++  }
++}
++
++let foo = new Foo();
++const aContext = foo["#aContext"];
++
++expect(aContext.access.get.call(foo).call(foo)).toBe(2);
++expect(foo.callA()).toBe(2);
++foo.value = 123;
++expect(aContext.access.get.call(foo).call(foo)).toBe(124);
++expect(foo.callA()).toBe(124);
++
++expect(aContext.name).toBe("#a");
++expect(aContext.kind).toBe("method");
++expect(aContext.isStatic).toBe(false);
++expect(aContext.isPrivate).toBe(true);
++expect(typeof aContext.addInitializer).toBe("function");
++expect(typeof aContext.setMetadata).toBe("function");
++expect(typeof aContext.getMetadata).toBe("function");
+diff --git a/packages/babel-plugin-proposal-decorators/test/fixtures/2021-12-methods--to-es2015/applyDecs-public-method-no-class-decorator__HABITAT/exec.js b/packages/babel-plugin-proposal-decorators/test/fixtures/2021-12-methods--to-es2015/applyDecs-public-method-no-class-decorator__HABITAT/exec.js
+new file mode 100644
+index 0000000000..a05b5c7669
+--- /dev/null
++++ b/packages/babel-plugin-proposal-decorators/test/fixtures/2021-12-methods--to-es2015/applyDecs-public-method-no-class-decorator__HABITAT/exec.js
+@@ -0,0 +1,20 @@
++function dec(fn, context) {
++  context.addInitializer((instance) => {
++    instance[context.name + "Context"] = context;
++  });
++  return function () {
++    return fn.call(this) * 2;
++  };
++}
++
++class Foo {
++  @dec
++  a() {
++    return 1;
++  }
++}
++
++let foo = new Foo();
++expect(foo.a()).toBe(2);
++expect(foo["aContext"].name).toBe("a");
++expect(foo["aContext"].isPrivate).toBe(false);
+diff --git a/packages/babel-plugin-proposal-decorators/test/fixtures/2021-12-methods--to-es2015/applyDecs-static-member-no-class-decorator__HABITAT/exec.js b/packages/babel-plugin-proposal-decorators/test/fixtures/2021-12-methods--to-es2015/applyDecs-static-member-no-class-decorator__HABITAT/exec.js
+new file mode 100644
+index 0000000000..6c3b525b06
+--- /dev/null
++++ b/packages/babel-plugin-proposal-decorators/test/fixtures/2021-12-methods--to-es2015/applyDecs-static-member-no-class-decorator__HABITAT/exec.js
+@@ -0,0 +1,29 @@
++function dec(fn, context) {
++  context.addInitializer((instance) => {
++    instance[context.name + "Context"] = context;
++  });
++  return function () {
++    return fn.call(this) + 100;
++  };
++}
++
++class Foo {
++  static value = 1;
++
++  @dec
++  static #a() {
++    return this.value;
++  }
++
++  static callA() {
++    return this.#a();
++  }
++}
++
++const aContext = Foo["#aContext"];
++expect(aContext.access.get.call(Foo).call(Foo)).toBe(101);
++expect(Foo.callA()).toBe(101);
++Foo.value = 2;
++expect(Foo.callA()).toBe(102);
++expect(aContext.isStatic).toBe(true);
++expect(aContext.isPrivate).toBe(true);
+diff --git a/packages/babel-plugin-proposal-decorators/test/fixtures/2021-12-methods--to-es2015/class-decorator-return-value__HABITAT/exec.js b/packages/babel-plugin-proposal-decorators/test/fixtures/2021-12-methods--to-es2015/class-decorator-return-value__HABITAT/exec.js
+new file mode 100644
+index 0000000000..f1fde8455e
+--- /dev/null
++++ b/packages/babel-plugin-proposal-decorators/test/fixtures/2021-12-methods--to-es2015/class-decorator-return-value__HABITAT/exec.js
+@@ -0,0 +1,21 @@
++function classDec(klass, context) {
++  expect(context.kind).toBe("class");
++  return class Bar extends klass {
++    static get original() {
++      return klass;
++    }
++  };
++}
++
++let Foo;
++@classDec
++class Foo_ {
++  value = 1;
++}
++
++Foo = Foo_;
++
++expect(Foo).not.toBe(Foo_);
++expect(Foo.name).toBe("Bar");
++expect(Foo.original).toBe(Foo_);
++expect(new Foo().value).toBe(1);

@@ -1,0 +1,148 @@
+diff --git a/packages/babel-plugin-proposal-decorators/test/fixtures/2021-12-methods--to-es2015/private/exec.js b/packages/babel-plugin-proposal-decorators/test/fixtures/2021-12-methods--to-es2015/private/exec.js
+index 5a3ce1785f..a74cb2331e 100644
+--- a/packages/babel-plugin-proposal-decorators/test/fixtures/2021-12-methods--to-es2015/private/exec.js
++++ b/packages/babel-plugin-proposal-decorators/test/fixtures/2021-12-methods--to-es2015/private/exec.js
+@@ -1,8 +1,4 @@
+ function dec(fn, context) {
+-  context.addInitializer((instance) => {
+-    instance[context.name + 'Context'] = context;
+-  });
+-
+   return function () {
+     return fn.call(this) + 1;
+   }
+@@ -23,19 +19,6 @@ class Foo {
+ 
+ let foo = new Foo();
+ 
+-const aContext = foo['#aContext'];
+-
+-// First call gets the method, second call calls the method with correct `this`
+-expect(aContext.access.get.call(foo).call(foo)).toBe(2);
+ expect(foo.callA()).toBe(2);
+ foo.value = 123;
+-expect(aContext.access.get.call(foo).call(foo)).toBe(124);
+ expect(foo.callA()).toBe(124);
+-
+-expect(aContext.name).toBe('#a');
+-expect(aContext.kind).toBe('method');
+-expect(aContext.isStatic).toBe(false);
+-expect(aContext.isPrivate).toBe(true);
+-expect(typeof aContext.addInitializer).toBe('function');
+-expect(typeof aContext.setMetadata).toBe('function');
+-expect(typeof aContext.getMetadata).toBe('function');
+diff --git a/packages/babel-plugin-proposal-decorators/test/fixtures/2021-12-methods--to-es2015/public/exec.js b/packages/babel-plugin-proposal-decorators/test/fixtures/2021-12-methods--to-es2015/public/exec.js
+index 0f27b61caa..b9ec2b92e3 100644
+--- a/packages/babel-plugin-proposal-decorators/test/fixtures/2021-12-methods--to-es2015/public/exec.js
++++ b/packages/babel-plugin-proposal-decorators/test/fixtures/2021-12-methods--to-es2015/public/exec.js
+@@ -1,8 +1,4 @@
+ function dec(fn, context) {
+-  context.addInitializer((instance) => {
+-    instance[context.name + 'Context'] = context;
+-  });
+-
+   return function () {
+     return fn.call(this) + 1;
+   }
+@@ -24,27 +20,8 @@ class Foo {
+ 
+ let foo = new Foo();
+ 
+-const aContext = foo['aContext'];
+-const bContext = foo['bContext'];
+-
+ expect(foo.a()).toBe(2);
+ expect(foo.b()).toBe(2);
+ foo.value = 123;
+ expect(foo.a()).toBe(124);
+ expect(foo.b()).toBe(124);
+-
+-expect(aContext.name).toBe('a');
+-expect(aContext.kind).toBe('method');
+-expect(aContext.isStatic).toBe(false);
+-expect(aContext.isPrivate).toBe(false);
+-expect(typeof aContext.addInitializer).toBe('function');
+-expect(typeof aContext.setMetadata).toBe('function');
+-expect(typeof aContext.getMetadata).toBe('function');
+-
+-expect(bContext.name).toBe('b');
+-expect(bContext.kind).toBe('method');
+-expect(bContext.isStatic).toBe(false);
+-expect(bContext.isPrivate).toBe(false);
+-expect(typeof bContext.addInitializer).toBe('function');
+-expect(typeof bContext.setMetadata).toBe('function');
+-expect(typeof bContext.getMetadata).toBe('function');
+diff --git a/packages/babel-plugin-proposal-decorators/test/fixtures/2021-12-methods--to-es2015/static-private/exec.js b/packages/babel-plugin-proposal-decorators/test/fixtures/2021-12-methods--to-es2015/static-private/exec.js
+index bab58275b4..47deb64ec3 100644
+--- a/packages/babel-plugin-proposal-decorators/test/fixtures/2021-12-methods--to-es2015/static-private/exec.js
++++ b/packages/babel-plugin-proposal-decorators/test/fixtures/2021-12-methods--to-es2015/static-private/exec.js
+@@ -1,8 +1,4 @@
+ function dec(fn, context) {
+-  context.addInitializer((instance) => {
+-    instance[context.name + 'Context'] = context;
+-  });
+-
+   return function () {
+     return fn.call(this) + 1;
+   }
+@@ -21,19 +17,6 @@ class Foo {
+   }
+ }
+ 
+-const aContext = Foo['#aContext'];
+-
+-// First call gets the method, second call calls the method with correct `this`
+-expect(aContext.access.get.call(Foo).call(Foo)).toBe(2);
+ expect(Foo.callA()).toBe(2);
+ Foo.value = 123;
+-expect(aContext.access.get.call(Foo).call(Foo)).toBe(124);
+ expect(Foo.callA()).toBe(124);
+-
+-expect(aContext.name).toBe('#a');
+-expect(aContext.kind).toBe('method');
+-expect(aContext.isStatic).toBe(true);
+-expect(aContext.isPrivate).toBe(true);
+-expect(typeof aContext.addInitializer).toBe('function');
+-expect(typeof aContext.setMetadata).toBe('function');
+-expect(typeof aContext.getMetadata).toBe('function');
+diff --git a/packages/babel-plugin-proposal-decorators/test/fixtures/2021-12-methods--to-es2015/static-public/exec.js b/packages/babel-plugin-proposal-decorators/test/fixtures/2021-12-methods--to-es2015/static-public/exec.js
+index e68458db59..e5d03ee480 100644
+--- a/packages/babel-plugin-proposal-decorators/test/fixtures/2021-12-methods--to-es2015/static-public/exec.js
++++ b/packages/babel-plugin-proposal-decorators/test/fixtures/2021-12-methods--to-es2015/static-public/exec.js
+@@ -1,8 +1,4 @@
+ function dec(fn, context) {
+-  context.addInitializer((instance) => {
+-    instance[context.name + 'Context'] = context;
+-  });
+-
+   return function () {
+     return fn.call(this) + 1;
+   }
+@@ -22,27 +18,8 @@ class Foo {
+   }
+ }
+ 
+-const aContext = Foo['aContext'];
+-const bContext = Foo['bContext'];
+-
+ expect(Foo.a()).toBe(2);
+ expect(Foo.b()).toBe(2);
+ Foo.value = 123;
+ expect(Foo.a()).toBe(124);
+ expect(Foo.b()).toBe(124);
+-
+-expect(aContext.name).toBe('a');
+-expect(aContext.kind).toBe('method');
+-expect(aContext.isStatic).toBe(true);
+-expect(aContext.isPrivate).toBe(false);
+-expect(typeof aContext.addInitializer).toBe('function');
+-expect(typeof aContext.setMetadata).toBe('function');
+-expect(typeof aContext.getMetadata).toBe('function');
+-
+-expect(bContext.name).toBe('b');
+-expect(bContext.kind).toBe('method');
+-expect(bContext.isStatic).toBe(true);
+-expect(bContext.isPrivate).toBe(false);
+-expect(typeof bContext.addInitializer).toBe('function');
+-expect(typeof bContext.setMetadata).toBe('function');
+-expect(typeof bContext.getMetadata).toBe('function');
